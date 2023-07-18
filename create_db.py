@@ -4,24 +4,30 @@
 import os
 import argparse
 import json
+from getpass import getpass
 from collections.abc import Iterable
 import uuid
 import mysql.connector
 
-# Define MySQL connection parameters
-MYSQL_HOST = 'localhost'
-MYSQL_USER = 'chris'
-MYSQL_PASSWORD = 'F1reDr4g0n'
-MYSQL_DATABASE = 'redsquirrel'
-
 # The name of our script
 SCRIPT_NAME = os.path.basename(__file__)
+
+# Default host name to connect to the database
+DEFAULT_HOST_NAME = 'localhost'
 
 # Argparse-related definitions
 # Declare the progam description
 ARGPARSE_PROGRAM_DESC = 'Create or updates a database schema from an ESRI Layer JSON file'
 # Epilog to argparse arguments
 ARGPARSE_EPILOG = 'Seriously consider backing up your database before running this script'
+# Host name help
+ARGPARSE_HOST_HELP = f'The database host to connect to (default={DEFAULT_HOST_NAME})'
+# Name of the database to connect to
+ARGPARSE_DATABASE_HELP = 'The database to connect to'
+# User name help
+ARGPARSE_USER_HELP = 'The username to connect to the database with'
+# Password help
+ARGPARSE_PASSWORD_HELP = 'The password use to connect to the database (leave empty to be prompted)'
 # Declare the help text for the JSON filename parameter (for argparse)
 ARGPARSE_JSON_FILE_HELP = 'Path to the JSON file containing the ESRI exported Layer JSON'
 # Declare the help text for the force deletion flag
@@ -65,20 +71,58 @@ def get_arguments() -> dict:
     parser = argparse.ArgumentParser(prog=SCRIPT_NAME,
                                      description=ARGPARSE_PROGRAM_DESC,
                                      epilog=ARGPARSE_EPILOG)
-    parser.add_argument('json_file',
-                        type=argparse.FileType('r'),
+    parser.add_argument('json_file', nargs='+',
                         help=ARGPARSE_JSON_FILE_HELP)
+    parser.add_argument('-o', '--host', default=DEFAULT_HOST_NAME,
+                        help=ARGPARSE_HOST_HELP)
+    parser.add_argument('-d', '--database', help=ARGPARSE_DATABASE_HELP)
+    parser.add_argument('-u', '--user', help=ARGPARSE_USER_HELP)
     parser.add_argument('-f', '--force', action='store_true',
                         help=ARGPARSE_FORCE_HELP)
     parser.add_argument('--verbose', action='store_true',
                         help=ARGPARSE_VERBOSE_HELP)
+    parser.add_argument('-p', '--password', action='store_true',
+                        help=ARGPARSE_PASSWORD_HELP)
     args = parser.parse_args()
 
-    # Read in the JSON
-    with args.json_file as infile:
-        schema = json.load(infile)
+    # Find the JSON file and the password (which is allowed to be eliminated)
+    json_file, user_password = None, None
+    if not args.json_file:
+        # Raise argument error
+        raise ValueError('Missing a required argument')
+    elif len(args.json_file) == 1:
+        json_file = args.json_file[0]
+    elif len(args.json_file) == 2:
+        user_password = args.json_file[0]
+        json_file = args.json_file[1]
+    else:
+        # Raise argument error
+        print('Too many arguments specified for input file')
+        parser.print_help()
+        exit(10)
 
-    cmd_opts = {'force': args.force, 'verbose': args.verbose}
+    # Read in the JSON
+    try:
+        with open(json_file) as infile:
+            schema = json.load(infile)
+    except FileNotFoundError:
+        print(f'Unable to open JSON file {json_file}')
+        exit(11)
+    except json.JSONDecodeError:
+        print(f'File is not valid JSON {json_file}')
+        exit(12)
+
+    # Check if we need to prompt for the password
+    if args.password and not user_password:
+        user_password = getpass()
+
+    cmd_opts = {'force': args.force,
+                'verbose': args.verbose,
+                'host': args.host,
+                'database': args.database,
+                'user': args.user,
+                'password': user_password
+               }
 
     # Return the loaded JSON
     return schema, cmd_opts
@@ -605,10 +649,15 @@ def update_database(cursor, schema: list, conn, opts: dict) -> None:
         opts: contains other command line options
     """
 
-    # Process all the tables first
     for one_schema in schema:
-        for one_table in one_schema['tables']:
-            db_process_table(cursor, one_table, conn, opts)
+        # Process all the tables first
+        try:
+            for one_table in one_schema['tables']:
+                db_process_table(cursor, one_table, conn, opts)
+        except RuntimeError as ex:
+            print('Error', ex)
+            print('Specify the -f flag to force the removal of existing tables')
+            exit(200)
 
         # Process indexes
         db_process_indexes(cursor, one_schema['indexes'], conn, opts)
@@ -627,18 +676,28 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
     index = None
     layers = None
     tables = None
+    required_opts = ('host', 'database', 'password', 'user')
 
     # Default the opts paramter if it's not specified
     if opts is None:
-        opts = {}
+        raise ValueError('Missing command line parameters')
+    if not all(required in opts for required in required_opts):
+        print('Missing required command line database parameters')
+        exit(100)
 
     # MySQL connection
-    db_conn = mysql.connector.connect(
-        host=MYSQL_HOST,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE
-    )
+    try:
+        db_conn = mysql.connector.connect(
+            host=opts["host"],
+            database=opts["database"],
+            password=opts["password"],
+            user=opts["user"]
+        )
+    except mysql.connector.errors.ProgrammingError as ex:
+        print('Error', ex)
+        print('Please correct errors and try again')
+        exit(101)
+
     cursor = db_conn.cursor()
 
     try:
