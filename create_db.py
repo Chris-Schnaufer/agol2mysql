@@ -9,6 +9,15 @@ from collections.abc import Iterable
 import uuid
 import mysql.connector
 
+"""
+survey_item_id = '8ad7e11f82fa44c0a52db4ba435b864e' # test (Feature Server) (Form in My Content)
+gis = GIS(survey123_api_url, survey123_username, survey123_password)
+print(gis)
+sr = gis.content.search('owner:schnaufer_uagis')
+layer = sr[0] # sr[0].type == 'Feature Service'
+json_schema = layer.properties # Same as downloading schema JSON from web
+"""
+
 # The name of our script
 SCRIPT_NAME = os.path.basename(__file__)
 
@@ -59,14 +68,15 @@ def _sql_str(haystack: str, replacement: str = None) -> str:
                    .replace('*', replacement)
 
 
-def get_arguments() -> dict:
+def get_arguments() -> tuple:
     """ Returns the data from the parsed command line arguments
     Returns:
-        A string containing the JSON file name to process
-    Notes:
-        The returned file name is not checked for JSON contents
+        A tuple consisting of a dict containing the loaded JSON to process, and
+        a dict of the command line options
     Exceptions:
-        Throws an exception if the file is not JSON compatible
+        A ValueError exception is raised if the filename is not specified
+    Notes:
+        If an error is found, the script will exit with a non-zero return code
     """
     parser = argparse.ArgumentParser(prog=SCRIPT_NAME,
                                      description=ARGPARSE_PROGRAM_DESC,
@@ -96,13 +106,14 @@ def get_arguments() -> dict:
         user_password = args.json_file[0]
         json_file = args.json_file[1]
     else:
-        # Raise argument error
+        # Report the problem
         print('Too many arguments specified for input file')
         parser.print_help()
         exit(10)
 
     # Read in the JSON
     try:
+        schema = None
         with open(json_file) as infile:
             schema = json.load(infile)
     except FileNotFoundError:
@@ -678,7 +689,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
     tables = None
     required_opts = ('host', 'database', 'password', 'user')
 
-    # Default the opts paramter if it's not specified
+    # Check the opts parameter
     if opts is None:
         raise ValueError('Missing command line parameters')
     if not all(required in opts for required in required_opts):
