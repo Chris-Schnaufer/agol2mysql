@@ -234,19 +234,15 @@ def get_enum(domain: dict) -> list:
     # Generate a table declaration for the values
     table_name = _sql_str(domain['name'])
     table_cols = [ {
-        'name': 'id',
-        'type': 'INT',
+        'name': 'code',
+        'type': 'VARCHAR(256)',
         'null_allowed': False,
         'primary': True,
-        'auto_increment': True
+        'auto_increment': False
         }, {
         'name': 'name',
         'type': 'VARCHAR(256)',
         'null_allowed': False,
-        }, {
-        'name': 'code',
-        'type': 'VARCHAR(256)',
-        'null_allowed': False
         }
     ]
 
@@ -257,8 +253,8 @@ def get_enum(domain: dict) -> list:
         new_values[index] = {'name': one_enum['name'], 'code': one_enum['code']}
         index = index + 1
 
-    # Return the necessary information
-    return ({'name': table_name, 'primary_col_name': 'id', 'columns': table_cols}, # New table info
+    # Return the necessary information (new table info, and other returns)
+    return ({'name': table_name, 'primary_col_name': 'code', 'columns': table_cols},
             {'table': table_name, 'values': new_values}  # Data insert info
            )
 
@@ -315,7 +311,7 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
         case 'esriFieldTypeString':
             if 'domain' in col and col['domain']:
                 enum_table, enum_values = get_enum(col['domain'])
-                col_type = 'INT'
+                col_type = 'VARCHAR(256)'
                 make_index = True
                 foreign_key = {'col_name': col_name,
                                'reference': enum_table['name'],
@@ -360,8 +356,8 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
         # Find the origin relationship for this destination relationship
         target_table = next((rel for rel in orig_rels if rel['id'] == found_rel['table_id']), None)
         if not target_table:
-            raise IndexError(f'Unknown target table for relation {found_rel["rel_name"]} with table '\
-                             f'index {found_rel["table_id"]}')
+            raise IndexError(f'Unknown target table for relation {found_rel["rel_name"]} ' \
+                             f'with table index {found_rel["table_id"]}')
         target_rel = next((rel for rel in target_table['relations'] if \
                                     rel['table_id'] == table_id), None)
         if target_rel:
@@ -380,17 +376,20 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
             'default': default_value,
             'foreign_key': foreign_key,
             'null_allowed': null_allowed,
-            'primary': is_primary
+            'primary': is_primary,
+            'comment': 'ALIAS:[' + _sql_str(col['alias']) + ']' \
+                                if 'alias' in col and not col['alias'] == col['name'] else ''
         },
         'table': enum_table,
         'values': enum_values
     }
 
 
-def get_geometry_columns(esri_geometry_type: str) -> Optional[tuple]:
+def get_geometry_columns(esri_geometry_type: str, geom_srid: int = 4326) -> Optional[tuple]:
     """Returns the column(s) representing the ESRI geometry type
     Arguments:
         esri_geometry_type: the string representing the geometry type
+        geom_srid: the srid of the geometry type
     Returns:
         A tuple of column definitions that represent the geometry type, or None
         for esriGeometryNull
@@ -444,7 +443,7 @@ def get_geometry_columns(esri_geometry_type: str) -> Optional[tuple]:
             col_type = 'GEOMETRY'
 
         case 'esriGeometryTriangeFan':
-            col_type = 'GEOMETRY'
+            col_type = 'GEOMETRYCOLLECTION'
 
         case 'esriGeometryRay':
             col_type = 'GEOMETRY'
@@ -453,7 +452,7 @@ def get_geometry_columns(esri_geometry_type: str) -> Optional[tuple]:
             col_type = 'GEOMETRY'
 
         case 'esriGeometryTriangles':
-            col_type = 'GEOMETRY'
+            col_type = 'GEOMETRYCOLLECTION'
 
     # Checks before returning values
     if col_type is None:
@@ -465,6 +464,7 @@ def get_geometry_columns(esri_geometry_type: str) -> Optional[tuple]:
             'type': col_type,
             'index': True,
             'is_spatial': True,
+            'srid': geom_srid,
             'default': None,
             'foreign_key': None,
             'null_allowed': False,
@@ -492,7 +492,8 @@ def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple) ->
 
         # An invalid index will have column names that don't exist
         if not index_fields.issubset(table_columns):
-            print(f'Invalid index found (contains invalid columns) \"{one_index["name"]}\"', flush=True)
+            print(f'Invalid index found (contains invalid columns) \"{one_index["name"]}\"', \
+                                                                                    flush=True)
             print( '   Skipping invalid index with fields', index_fields, flush=True)
             continue
 
@@ -505,6 +506,21 @@ def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple) ->
             })
 
     return tuple(return_idxs)
+
+
+def get_srid_from_extent(extent: dict) -> Optional[int]:
+    """Parses the parameter for the defined SRID and returns it
+    Arguments:
+        extent: the ESRI defined extent JSON
+    Returns:
+        The found SRID or None
+    """
+    found_srid = None
+    if 'spatialReference' in extent and extent['spatialReference']:
+        if 'wkid' in extent['spatialReference'] and extent['spatialReference']['wkid']:
+            found_srid = int(extent['spatialReference']['wkid'])
+
+    return found_srid
 
 
 def process_layer_table(esri_schema: dict, relationships: list) -> dict:
@@ -559,7 +575,9 @@ def process_layer_table(esri_schema: dict, relationships: list) -> dict:
 
     # Check for geometry types
     if 'geometryType' in esri_schema and esri_schema['geometryType']:
-        geom_columns = get_geometry_columns(esri_schema['geometryType'])
+        cur_srid = get_srid_from_extent(esri_schema['extent']) \
+                                if ('extent' in esri_schema and esri_schema['extent']) else 4326
+        geom_columns = get_geometry_columns(esri_schema['geometryType'], cur_srid)
         if geom_columns:
             columns.extend(geom_columns)
 
@@ -596,18 +614,19 @@ def db_table_exists(cursor, table_name: str, conn) -> bool:
     return cursor.rowcount > 0
 
 
-def db_drop_table(cursor, table_name: str, opts: dict) -> None:
+def db_drop_table(cursor, table_name: str, opts: dict, conn) -> None:
     """Drops the specified table from the database. Will remove any foreign keys dependent
        upon the table
     Arguments:
         cursor: the database cursor
         table_name: the name of the table to drop
         opts: command line options
+        conn: the database connection
     """
     # Find and remove any foreign key that point to this table
-    query = 'select table_name, constraint_name from information_schema.key_column_usage where ' \
-            'referenced_table_name=%s'
-    cursor.execute(query, (table_name,))
+    query = 'SELECT table_name, constraint_name FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE ' \
+            'referenced_table_schema = %s AND referenced_table_name=%s'
+    cursor.execute(query, (conn.database, table_name))
     fks = {}
     for parent_table_name, constraint_name in cursor:
         if parent_table_name not in fks:
@@ -659,6 +678,9 @@ def db_create_table(cursor, table: dict, opts: dict) -> None:
             if not one_col['null_allowed']:
                 col_sql += ' NOT NULL'
 
+        if 'srid' in one_col and one_col['srid']:
+            col_sql += f' SRID {one_col["srid"]}'
+
         if 'primary' in one_col and one_col['primary']:
             col_sql += ' PRIMARY KEY'
 
@@ -667,6 +689,9 @@ def db_create_table(cursor, table: dict, opts: dict) -> None:
 
         if 'default' in one_col and one_col['default'] is not None:
             col_sql += f' DEFAULT {one_col["default"]}'
+
+        if 'comment' in one_col and one_col['comment']:
+            col_sql += f' COMMENT \'{one_col["comment"]}\''
 
         if 'foreign_key' in one_col and one_col['foreign_key']:
             fk_info = one_col['foreign_key']
@@ -711,7 +736,7 @@ def db_process_table(cursor, table: dict, conn, opts: dict) -> None:
                                 'please remove it before trying again')
 
         print(f'Forcing the drop of table {table["name"]}', flush=True)
-        db_drop_table(cursor, table["name"], opts)
+        db_drop_table(cursor, table["name"], opts, conn)
 
     # Create the table
     db_create_table(cursor, table, opts)
