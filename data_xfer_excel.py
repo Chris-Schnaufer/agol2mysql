@@ -231,7 +231,7 @@ def add_update_data(table_name: str, col_names: tuple, col_values: tuple, geom_c
     else:
         query_cols = col_names
         query_types = list(('%s' for one_name in query_cols))
-        query_values = col_values
+        query_values = list(col_values)
 
     # Check for alias on a column name
     query_cols = list((one_name if not one_name in col_alias else col_alias[one_name] \
@@ -240,13 +240,16 @@ def add_update_data(table_name: str, col_names: tuple, col_values: tuple, geom_c
     # Generate the SQL
     if update:
         query = f'UPDATE {table_name} SET '
-        query += ' AND '.join((f'{query_cols[idx]}={query_types[idx]}' \
-                                                            for idx in range(0, len(query_cols))))
-        query += f'WHERE {opts["primary_key"]} = %s'
+        query += ', '.join((f'{query_cols[idx]}={query_types[idx]}' \
+                                    for idx in range(0, len(query_cols)) \
+                                        if query_cols[idx].lower() != opts["primary_key"].lower()))
+        query += f' WHERE {opts["primary_key"]} = %s'
 
-#                 ' AND '.join((f'{one_name}=%s' for one_name in query_cols)) + \
-#                f'WHERE {opts["primary_key"]} = %s'
-        query_values = query_values + (col_values[col_names.index(opts["primary_key"])],)
+        # Remove the primary key from the regular list of values
+        primary_key_index = next((idx for idx in range(0, len(query_cols)) \
+                                        if query_cols[idx].lower() == opts["primary_key"].lower()))
+        query_values = query_values[:primary_key_index] + query_values[primary_key_index+1:]
+        query_values = list(query_values)+list((col_values[col_names.index(opts["primary_key"])],))
     else:
         query = f'INSERT INTO {table_name} (' + ','.join(query_cols) + ') VALUES (' + \
                         ','.join(query_types) + ')'
@@ -408,6 +411,8 @@ def load_excel_file(filepath: str, opts: dict) -> None:
 
     # Open the EXCEL file and process each tab
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
+
+    print(f'Updating using {filepath}')
 
     for one_sheet in workbook.worksheets:
         process_sheet(one_sheet, cursor, db_conn, opts)
