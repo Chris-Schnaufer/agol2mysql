@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 """ This script movs data from an EXCEL spreadsheet to a MySql database
 """
 
@@ -376,7 +377,10 @@ def get_col_info(table_name: str, col_names: tuple, opts: dict, cursor, conn) ->
     found_col, found_type = None, None
     for col_name, col_type, col_comment in cursor:
         # Check for geometry
-        col_type_str = col_type.decode("utf-8").upper()
+        if type(col_type) == bytes:
+            col_type_str = col_type.decode("utf-8").upper()
+        else:
+            col_type_str = col_type.upper()
         if col_type_str in known_geom_types:
             found_col = col_name
             found_type = col_type_str
@@ -397,8 +401,8 @@ def get_col_info(table_name: str, col_names: tuple, opts: dict, cursor, conn) ->
                                   'specified on the command line')
             if all(expected_col in col_names for expected_col in (opts['point_col_x'], opts['point_col_y'])):
                 return_info = {'table_column': found_col,
-                               'col_sql': 'ST_SRID(POINT(%s, %s), 4326)' if opts['point_epsg'] is None else \
-                                          f'ST_TRANSFORM(ST_SRID(POINT(%s, %s), {opts["point_epsg"]}), 4326)',
+                               'col_sql': 'ST_GeomFromText(\'POINT(%s %s)\', 4326)' if opts['point_epsg'] is None else \
+                                          f'ST_TRANSFORM(ST_GeomFromText(\'POINT(%s %s)\', {opts["point_epsg"]}), 4326)',
                                'sheet_cols': (opts['point_col_x'], opts['point_col_y'])
                               }
         # Add other cases here
@@ -539,7 +543,6 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
     for one_row in rows_iter:
         # Skip if we're only adding columns found in the data sheet and it's not a match
         lc = one_row[col_name_idx].value.lower()
-        print(f'HACK: CUR COLS: {lc} -> {lower_col_names}',type(one_row))
         if 'use_schema_cols' not in opts or not opts['use_schema_cols']:
             if one_row[col_name_idx].value.lower() not in lower_col_names:
                 continue
