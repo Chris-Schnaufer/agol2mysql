@@ -86,7 +86,7 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_PASSWORD_HELP)
     parser.add_argument('--header', type=int, default=DEFAULT_NUM_HEADER_LINES,
                         help=ARGPARSE_HEADER_HELP)
-    parser.add_argument('--col_names_row', type=int, default=1,
+    parser.add_argument('--col_names_row', type=int, default=DEFAULT_COL_NAMES_ROW,
                         help=ARGPARSE_COL_NAMES_ROW_HELP)
     parser.add_argument('--col_names', help=ARGPARSE_COL_NAMES_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
@@ -186,7 +186,7 @@ def check_data_exists(table_name: str, col_names: tuple, col_values: tuple, geom
     if geom_col_info and not primary_key:
         query += f' AND {geom_col_info["table_column"]}={geom_col_info["col_sql"]}'
         query_values.extend((col_values[col_names.index(one_name)] for one_name in \
-                                                                    geom_col_info["sheeet_cols"]))
+                                                                    geom_col_info["sheet_cols"]))
 
     # Run the query and determine if we have a row or not
     if 'verbose' in opts and opts['verbose']:
