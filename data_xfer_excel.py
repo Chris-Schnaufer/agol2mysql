@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 """ This script movs data from an EXCEL spreadsheet to a MySql database
 """
 
@@ -292,7 +293,10 @@ def get_col_info(table_name: str, col_names: tuple, cursor, conn) -> tuple:
     found_col, found_type = None, None
     for col_name, col_type, col_comment in cursor:
         # Check for geometry
-        col_type_str = col_type.decode("utf-8").upper()
+        if type(col_type) == bytes:
+            col_type_str = col_type.decode("utf-8").upper()
+        else:
+            col_type_str = col_type.upper()
         if col_type_str in known_geom_types:
             found_col = col_name
             found_type = col_type_str
@@ -310,7 +314,7 @@ def get_col_info(table_name: str, col_names: tuple, cursor, conn) -> tuple:
         case 'POINT':
             if all(expected_col in col_names for expected_col in ('x', 'y')):
                 return_info = {'table_column': found_col,
-                               'col_sql': 'ST_SRID(POINT(%s, %s), 4326)',
+                               'col_sql': 'ST_GeomFromText(\'POINT(%s %s)\', 4326)',
                                'sheet_cols': ('x', 'y')
                               }
         # Add other cases here
@@ -408,6 +412,13 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         sys.exit(101)
 
     cursor = db_conn.cursor()
+
+    # Get the database version and add it to the options
+    cursor.execute('SELECT VERSION()')
+    cur_row = next(cursor)
+    if cur_row:
+        opts['mysql_version'] = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
+    cursor.reset()
 
     # Open the EXCEL file and process each tab
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)

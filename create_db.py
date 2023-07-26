@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 """This script will create or update the database using a Layer JSON file exported/copied from ESRI
 """
 
@@ -679,7 +680,8 @@ def db_create_table(cursor, table: dict, opts: dict) -> None:
                 col_sql += ' NOT NULL'
 
         if 'srid' in one_col and one_col['srid']:
-            col_sql += f' SRID {one_col["srid"]}'
+            if 'mysql_version' not in opts or opts['mysql_version'][0] >= 8:
+                col_sql += f' SRID {one_col["srid"]}'
 
         if 'primary' in one_col and one_col['primary']:
             col_sql += ' PRIMARY KEY'
@@ -803,7 +805,7 @@ def db_process_indexes(cursor, indexes: tuple, conn, opts: dict) -> None:
                 cursor.execute(query)
                 cursor.reset()
             except mysql.connector.errors.DatabaseError as ex:
-                print('    Warning: Unable to remove matching index:', ex, flush=True)
+                print('Warning: Unable to remove matching index:', ex, flush=True)
                 print('    Skipping re-creation of index')
                 if 'verbose' in opts and opts['verbose']:
                     print(f'   {query}')
@@ -934,6 +936,13 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
 
     cursor = db_conn.cursor()
 
+    # Get the database version and add it to the options
+    cursor.execute('SELECT VERSION()')
+    cur_row = next(cursor)
+    if cur_row:
+        opts['mysql_version'] = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
+    cursor.reset()
+
     try:
         # Process any layers
         index = 0
@@ -958,7 +967,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         raise
 
     # Processes the discovered database objects
-    update_database(cursor, tables + layers, db_conn, opts)
+    update_database(cursor, layers + tables, db_conn, opts)
 
 
 if __name__ == "__main__":
