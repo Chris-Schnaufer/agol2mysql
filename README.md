@@ -15,4 +15,30 @@ Follow the following steps to get the schema JSON into a file
 6. Click once in the black box containing the JSON and select all the text. On Windows that will be <CMD>+A, on MacOS that will be <COMMAND>+A. Only the text in the black box should be highlighted. If all the text on the page is highlighted, click in the black box and try again
 7. Copy the JSON from the web page and open your favorite text editor. Paste the JSON fromr the clipboard in the editor and save the JSON
 
-## Creating the Schema
+## Prerequisites
+The scripts in this repository use Python3.10 or later.
+To check what Python version you have, open a console window and type the following command
+```bash
+python3 --version
+```
+To ensure you have all the needed Python modules installed you can run the [pip3](https://pip.pypa.io/en/stable/) command.
+The following command will attempt to install the required Python modules.
+You can find the [requirements.txt](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/requirements.txt) file in this repository
+```bash
+pip3 install -r requirements.txt
+```
+
+## Creating the Database Schema
+The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to create the database schema from the [Schema JSON](#getting-the-schema-json) file
+
+Open a command window and run the following command to see all the options available when running this script
+```bash
+./create_db.py -h
+```
+
+This first example we will be creating the schema in a new database
+```bash
+./create_db.py -u myusername -p schema.json
+```
+When running this script you will be prompted to enter your database password before the schema is updated.
+
