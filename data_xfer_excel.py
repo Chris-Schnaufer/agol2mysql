@@ -25,6 +25,9 @@ DEFAULT_COL_NAMES_ROW = 1
 # The default primary key database name for the sheet data
 DEFAULT_PRIMARY_KEY_NAME = 'ObjectID'
 
+# Default EPSG code for points
+DEFAULT_GEOM_EPSG = 4326
+
 # Argparse-related definitions
 # Declare the progam description
 ARGPARSE_PROGRAM_DESC = 'Uploads data from an ESRI generated excel spreadsheet to the ' \
@@ -293,7 +296,7 @@ def get_col_info(table_name: str, col_names: tuple, cursor, conn) -> tuple:
     found_col, found_type = None, None
     for col_name, col_type, col_comment in cursor:
         # Check for geometry
-        if type(col_type) == bytes:
+        if isinstance(col_type, bytes):
             col_type_str = col_type.decode("utf-8").upper()
         else:
             col_type_str = col_type.upper()
@@ -314,7 +317,7 @@ def get_col_info(table_name: str, col_names: tuple, cursor, conn) -> tuple:
         case 'POINT':
             if all(expected_col in col_names for expected_col in ('x', 'y')):
                 return_info = {'table_column': found_col,
-                               'col_sql': 'ST_GeomFromText(\'POINT(%s %s)\', 4326)',
+                               'col_sql': f'ST_GeomFromText(\'POINT(%s %s)\', {DEFAULT_GEOM_EPSG})',
                                'sheet_cols': ('x', 'y')
                               }
         # Add other cases here

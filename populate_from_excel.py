@@ -10,6 +10,15 @@ import openpyxl
 from openpyxl import load_workbook
 import mysql.connector
 
+# Check if we have the geometry transformation module
+try:
+    from osgeo import ogr
+    from osgeo import osr
+except ModuleNotFoundError:
+    GEOM_CAN_TRANSFORM = False
+else:
+    GEOM_CAN_TRANSFORM = True
+
 # The name of our script
 SCRIPT_NAME = os.path.basename(__file__)
 
@@ -35,7 +44,7 @@ DEFAULT_SCHEMA_DATA_TYPE_COL = 'Data Type'
 DEFAULT_SCHEMA_DESCRIPTION_COL = 'Description (Optional)'
 
 # Default EPSG code for points
-DEFAULT_POINT_EPSG = 4326
+DEFAULT_GEOM_EPSG = 4326
 
 # Argparse-related definitions
 # Declare the progam description
@@ -102,8 +111,8 @@ ARGPARSE_PRIMARY_KEY_HELP = 'The name of the primary key to use when checking if
 ARGPARSE_POINT_COLS_HELP = 'The names of the X and Y columns in the spreadsheet that represent ' \
                            'a point type when creating a schema ("<x name>,<y name>")'
 # Help for specifying the EPSG code that the point coordinates are in
-ARGPARSE_POINT_EPSG_HELP = 'The EPSG code of the coordinate system for the points values ' \
-                           f'(default is {DEFAULT_POINT_EPSG})'
+ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric values ' \
+                           f'(default is {DEFAULT_GEOM_EPSG})'
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
 
@@ -149,8 +158,8 @@ def get_arguments() -> tuple:
     parser.add_argument('--use_schema_cols', action='store_true',
                         help=ARGPARSE_USE_SCHEMA_COLS_HELP)
     parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
-    parser.add_argument('--point_epsg', type=int, default=DEFAULT_POINT_EPSG,
-                        help=ARGPARSE_POINT_EPSG_HELP)
+    parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
+                        help=ARGPARSE_GEOMETRY_EPSG_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     args = parser.parse_args()
@@ -213,7 +222,7 @@ def get_arguments() -> tuple:
                 'use_schema_cols': args.use_schema_cols,
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
-                'point_epsg': args.point_epsg,
+                'geometry_epsg': args.geometry_epsg,
                 'primary_key': args.key_name
                }
 
@@ -286,6 +295,39 @@ def check_data_exists(table_name: str, col_names: tuple, col_values: tuple, geom
     return False
 
 
+def transform_points(from_epsg: int, to_epsg: int, values: tuple) -> list:
+    """Returns the list with the last num_values converted to the new coordinate system
+    Arguments:
+        from_epsg: original EPSG code
+        to_epsg: EPSG code to transform the points to
+        values: the list of values to transform (assumes X1, Y1, X2, Y2, ...)
+    Returns:
+        The list of transformed values
+    """
+    if len(values) % 2:
+        raise ValueError('Unable to transform points, an even number of X,Y values pairs are needed')
+
+    # Make sure we can transform points
+    if not GEOM_CAN_TRANSFORM:
+        raise ValueError('Unable to transform points, supporting osgeo module is not installed')
+
+    # Transform the points
+    return_values = []
+    idx = 0
+    from_sr = osr.SpatialReference()
+    from_sr.ImportFromEPSG(int(from_epsg))
+    to_sr = osr.SpatialReference()
+    to_sr.ImportFromEPSG(int(to_epsg))
+    transform = osr.CreateCoordinateTransformation(from_sr, to_sr)
+    while idx < len(values):
+        cur_geom = ogr.CreateGeometryFromWkt(f'POINT({values[idx]} {values[idx+1]} {from_epsg})')
+        cur_geom.Transform(transform)
+        return_values.extend((cur_geom.GetX(), cur_geom.GetY()))
+        idx = idx + 2
+
+    return return_values
+
+
 def add_update_data(table_name: str, col_names: tuple, col_values: tuple, geom_col_info: dict, \
                     col_alias: dict, cursor, update: bool, opts: dict) -> None:
     """Adds or updated data in a table
@@ -312,6 +354,11 @@ def add_update_data(table_name: str, col_names: tuple, col_values: tuple, geom_c
         query_types.append(geom_col_info['col_sql'])
         query_values.extend((col_values[col_names.index(one_name)] \
                                                     for one_name in geom_col_info['sheet_cols']))
+        # Check if we need to transform points locally and not by the database
+        if opts['mysql_version'][0] < 8 and opts['geometry_epsg'] is not None and opts['geometry_epsg'] != DEFAULT_GEOM_EPSG:
+            non_point_values = query_values[:len(query_values)-len(geom_col_info['sheet_cols'])]
+            new_point_values = transform_points(opts['geometry_epsg'], DEFAULT_GEOM_EPSG, query_values[-(len(geom_col_info['sheet_cols'])):])
+            query_values = non_point_values + new_point_values
     else:
         query_cols = col_names
         query_types = list(('%s' for one_name in query_cols))
@@ -377,7 +424,7 @@ def get_col_info(table_name: str, col_names: tuple, opts: dict, cursor, conn) ->
     found_col, found_type = None, None
     for col_name, col_type, col_comment in cursor:
         # Check for geometry
-        if type(col_type) == bytes:
+        if isinstance(col_type, bytes):
             col_type_str = col_type.decode("utf-8").upper()
         else:
             col_type_str = col_type.upper()
@@ -400,9 +447,12 @@ def get_col_info(table_name: str, col_names: tuple, opts: dict, cursor, conn) ->
                 raise ValueError(f'Point type found in table {table_name} but columns were not '
                                   'specified on the command line')
             if all(expected_col in col_names for expected_col in (opts['point_col_x'], opts['point_col_y'])):
+                if opts['mysql_version'][0] >= 8 and opts['geometry_epsg'] is not None and opts['geometry_epsg'] != DEFAULT_GEOM_EPSG:
+                    col_sql = f'ST_TRANSFORM(ST_GeomFromText(\'POINT(%s %s)\', {opts["geometry_epsg"]}), {DEFAULT_GEOM_EPSG})'
+                else:
+                    col_sql = f'ST_GeomFromText(\'POINT(%s %s)\', {DEFAULT_GEOM_EPSG})'
                 return_info = {'table_column': found_col,
-                               'col_sql': 'ST_GeomFromText(\'POINT(%s %s)\', 4326)' if opts['point_epsg'] is None else \
-                                          f'ST_TRANSFORM(ST_GeomFromText(\'POINT(%s %s)\', {opts["point_epsg"]}), 4326)',
+                               'col_sql': col_sql,
                                'sheet_cols': (opts['point_col_x'], opts['point_col_y'])
                               }
         # Add other cases here
@@ -542,7 +592,6 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
     col_info = []
     for one_row in rows_iter:
         # Skip if we're only adding columns found in the data sheet and it's not a match
-        lc = one_row[col_name_idx].value.lower()
         if 'use_schema_cols' not in opts or not opts['use_schema_cols']:
             if one_row[col_name_idx].value.lower() not in lower_col_names:
                 continue
@@ -741,6 +790,13 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         sys.exit(101)
 
     cursor = db_conn.cursor()
+
+    # Get the database version and add it to the options
+    cursor.execute('SELECT VERSION()')
+    cur_row = next(cursor)
+    if cur_row:
+        opts['mysql_version'] = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
+    cursor.reset()
 
     # Open the EXCEL file
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
