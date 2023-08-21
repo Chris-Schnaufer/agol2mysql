@@ -125,7 +125,7 @@ class A2Database:
             self._cursor.execute('SELECT VERSION()')
             cur_row = next(self._cursor)
             if cur_row:
-                _mysql_version = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
+                self._mysql_version = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
             self._cursor.reset()
 
     @staticmethod
@@ -217,14 +217,14 @@ class A2Database:
         """Returns the database minor revision number"""
         return self._mysql_version[1] if len(self._mysql_version) > 1 else 0
 
-    def execute(self, sql_command: str, params: tuple, multi: bool=False) -> None:
+    def execute(self, sql_command: str, params: tuple=None, multi: bool=False) -> None:
         """Handles the execution of a SQL statement"""
         if self._verbose:
             if params is not None:
                 print(sql_command, params, flush=True)
             else:
                 print(sql_command, flush=True)
-        self._cursor.excute(sql_command, params, multi)
+        self._cursor.execute(sql_command, params, multi)
 
     def fetchone(self):
         """Fetches one row"""
@@ -336,7 +336,7 @@ class A2Database:
                 if not point_col_x or not point_col_y:
                     raise ValueError(f'Point type found in table {table_name} but columns were '
                                       'not specified')
-                if all(expected_col in (point_col_x, point_col_y) for expected_col in col_names):
+                if all(expected_col in col_names for expected_col in (point_col_x, point_col_y)):
                     if self.version_major >= 8 and geometry_epsg is not None \
                                                             and geometry_epsg != self._epsg:
                         col_sql = 'ST_TRANSFORM(ST_GeomFromText(\'POINT(%s %s)\', ' \
@@ -350,7 +350,7 @@ class A2Database:
                 else:
                     raise ValueError(f'Expected point column names "{point_col_x}" and ' \
                                      f'"{point_col_y}" not found in specified column names: ', \
-                                     {col_names})
+                                     col_names)
             # Add other cases here
 
         if return_info is None:
@@ -565,9 +565,10 @@ class A2Database:
         return False
 
     def add_update_data(self, table_name: str, col_names: tuple, col_values: tuple, \
-                        col_alias: dict, geom_col_info: dict=None, geometry_epsg: int=None, \
+                        col_alias: dict, geom_col_info: dict=None, \
                         update: bool=False, primary_key: str=None, verbose: bool=False) -> None:
-        """Adds or updated data in a table
+        """Adds or updated data in a table. Caller needs to commit the data after al the data is
+           uploaded
         Arguments:
             table_name: the name of the table to add to/update
             col_names: the name of the columns to add/update
@@ -575,9 +576,9 @@ class A2Database:
             col_alias: alias information on columns consisting of column alias' as keys with
                        database column names as values. e.g.: {'alias': 'column nanme'}
             geom_col_info: information on the geometry column
-            geometry_epsg: the EPSG code of the geometry in the table
             update: flag indicating whether to update or insert a row of data
             primary_key: the primary key column name to use when updating a record
+            verbose: set to True to print information on the query used
         Notes:
             The required key names and value descriptions in geom_col_info are:
             'col_sql': the SQL fragment representing the geometry including any coordinate system
@@ -604,12 +605,6 @@ class A2Database:
             query_types.append(geom_col_info['col_sql'])
             query_values.extend((col_values[col_names.index(one_name)] \
                                                     for one_name in geom_col_info['sheet_cols']))
-            # Check if we need to transform points locally and not by the database
-            if self.version_major < 8 and geometry_epsg != self._epsg:
-                non_point_values = query_values[:len(query_values)-len(geom_col_info['sheet_cols'])]
-                new_point_values = transform_points(geometry_epsg, self._epsg, \
-                                                query_values[-(len(geom_col_info['sheet_cols'])):])
-                query_values = non_point_values + new_point_values
         else:
             query_cols = col_names
             query_types = list(('%s' for one_name in query_cols))

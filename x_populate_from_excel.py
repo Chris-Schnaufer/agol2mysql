@@ -169,7 +169,7 @@ def get_arguments() -> tuple:
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
-    excel_file, user_password = None, None
+    excel_file = None
     if not args.excel_file:
         # Raise argument error
         raise ValueError('Missing a required argument')
@@ -201,10 +201,6 @@ def get_arguments() -> tuple:
             if not one_name:
                 print('Please specify an X and Y column name for point support', flush=True)
                 sys.exit(13)
-
-    # Check if we need to prompt for the password
-    if args.password and not user_password:
-        user_password = getpass()
 
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
@@ -244,7 +240,7 @@ def transform_points(from_epsg: int, to_epsg: int, values: tuple) -> list:
     Returns:
         The list of transformed values
     """
-    if len(values) % 2:
+    if len(values) % 2 or len(values) < 1:
         raise ValueError('Unable to transform points, an even number of X,Y values pairs ' \
                          'are needed')
 
@@ -267,6 +263,45 @@ def transform_points(from_epsg: int, to_epsg: int, values: tuple) -> list:
         idx = idx + 2
 
     return return_values
+
+
+def transform_geom_cols(col_names: tuple, col_values: tuple, geom_col_info: dict, from_epsg: int, \
+                        to_epsg: int) -> list:
+    """Transforms geometry point to the specified coordinate system
+    Arguments:
+        col_name: the column names of the table
+        col_values: the values associated with the column names
+        geom_col_info: the geometry column information
+        from_epsg: the EPSG code to tranform from
+        to_epsg: the EPSG code to transform to
+    Return:
+        Returns a list of column values with the geometry values transformed
+    """
+    # Check if we can avoid the transformations
+    if from_epsg == to_epsg:
+        return list(col_values)
+    if len(geom_col_info['sheet_cols']) % 2:
+        raise ValueError('Invalid number of X,Y column name pairs specified')
+
+    pt_indexes = []
+    pt_values = []
+    idx = 0
+    while idx < len(geom_col_info['sheet_cols']):
+        x_idx = col_names.index(geom_col_info['sheet_cols'][idx])
+        y_idx = col_names.index(geom_col_info['sheet_cols'][idx+1])
+        pt_indexes.append(x_idx)
+        pt_indexes.append(y_idx)
+        pt_values.append(col_values[x_idx])
+        pt_values.append(col_values[y_idx])
+        idx += 2
+
+    new_pt_values = transform_points(from_epsg, to_epsg, pt_values)
+
+    return_values = list(col_values)
+    for idx, idx_val in enumerate(pt_indexes):
+        return_values[idx_val] = new_pt_values[idx]
+
+    return new_pt_values
 
 
 def map_col_type(col_type: str, raise_on_error: bool=False) -> str:
@@ -462,14 +497,18 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
 
         # Check for existing data and skip this row if it exists and we're not forcing
         data_exists = conn.check_data_exists(table_name, col_names, col_values, geom_col_info, \
-                                                opts['verbose'] if 'verbose' in opts else False)
+                                            primary_key=opts['primary_key'],
+                                            verbose=opts['verbose'] if 'verbose' in opts else False)
         if data_exists and not opts['force']:
             skipped_rows = skipped_rows + 1
             continue
 
         added_updated_rows = added_updated_rows + 1
+        if geom_col_info and conn.epsg != opts['geometry_epsg']:
+            col_values = transform_geom_cols(col_names, col_values, geom_col_info, \
+                                             opts['geometry_epsg'], conn.epsg)
         conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
-                             update=data_exists, geometry_epsg=opts['geometry_epsg'], \
+                             update=data_exists, \
                              primary_key=opts['primary_key'], verbose=opts['verbose'])
 
     if skipped_rows:
