@@ -12,6 +12,9 @@ from collections.abc import Iterable
 import uuid
 import mysql.connector
 
+import a2database
+from a2database import A2Database
+
 """
 survey_item_id = '8ad7e11f82fa44c0a52db4ba435b864e' # test (Feature Server) (Form in My Content)
 gis = GIS(survey123_api_url, survey123_username, survey123_password)
@@ -55,21 +58,6 @@ def _get_name_uuid() -> str:
     """
     return str(uuid.uuid4()).replace('-', '')
 
-def _sql_str(haystack: str, replacement: str = None) -> str:
-    """Removed characters that could be used for SQL injection (and replaces them with an 
-       optional character)
-    Arguments:
-        haystack: reference string for removing/replacing characters
-        replacement: optional string to use as a replacement for disallowed characters
-    Returns:
-        The updated string
-    """
-    if replacement is None:
-        replacement = ''
-    return haystack.replace(';', replacement).replace('(', replacement).replace(')', replacement) \
-                   .replace('"', replacement).replace("'", replacement).replace('%', replacement) \
-                   .replace('*', replacement)
-
 
 def get_arguments() -> tuple:
     """ Returns the data from the parsed command line arguments
@@ -99,16 +87,13 @@ def get_arguments() -> tuple:
     args = parser.parse_args()
 
     # Find the JSON file and the password (which is allowed to be eliminated)
-    json_file, user_password = None, None
+    json_file = None
     if not args.json_file:
         # Raise argument error
         raise ValueError('Missing a required argument')
 
     if len(args.json_file) == 1:
         json_file = args.json_file[0]
-    elif len(args.json_file) == 2:
-        user_password = args.json_file[0]
-        json_file = args.json_file[1]
     else:
         # Report the problem
         print('Too many arguments specified for input file', flush=True)
@@ -127,16 +112,12 @@ def get_arguments() -> tuple:
         print(f'File is not valid JSON {json_file}', flush=True)
         sys.exit(12)
 
-    # Check if we need to prompt for the password
-    if args.password and not user_password:
-        user_password = getpass()
-
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
                 'host': args.host,
                 'database': args.database,
                 'user': args.user,
-                'password': user_password
+                'password': args.password
                }
 
     # Return the loaded JSON
@@ -233,7 +214,7 @@ def get_enum(domain: dict) -> list:
         raise IndexError('Unknown column domain type key found - expected "codedValues"')
 
     # Generate a table declaration for the values
-    table_name = _sql_str(domain['name'])
+    table_name = A2Database.sqlstr(domain['name'])
     table_cols = [ {
         'name': 'code',
         'type': 'VARCHAR(256)',
@@ -284,7 +265,7 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
         unique_field_id = 'objectid'
 
     # Generate the column information
-    col_name = _sql_str(col['name'])
+    col_name = A2Database.sqlstr(col['name'])
     enum_table = None
     enum_values = None
     col_type = None
@@ -378,7 +359,7 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
             'foreign_key': foreign_key,
             'null_allowed': null_allowed,
             'primary': is_primary,
-            'comment': 'ALIAS:[' + _sql_str(col['alias']) + ']' \
+            'comment': 'ALIAS:[' + A2Database.sqlstr(col['alias']) + ']' \
                                 if 'alias' in col and not col['alias'] == col['name'] else ''
         },
         'table': enum_table,
@@ -488,7 +469,7 @@ def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple) ->
 
     # Loop through and add index entries
     for one_index in indexes:
-        index_fields = set(_sql_str(one_field.strip()) for one_field in \
+        index_fields = set(A2Database.sqlstr(one_field.strip()) for one_field in \
                                 one_index['fields'].split(','))
 
         # An invalid index will have column names that don't exist
@@ -546,12 +527,12 @@ def process_layer_table(esri_schema: dict, relationships: list) -> dict:
     indexes = []
     values = []
     unique_field_id = 'objectid'
-    table_name = _sql_str(esri_schema['name'])
+    table_name = A2Database.sqlstr(esri_schema['name'])
 
     if 'uniqueIdField' in esri_schema:
         if isinstance(esri_schema['uniqueIdField'], dict) and \
                 'name' in esri_schema['uniqueIdField']:
-            unique_field_id = _sql_str(esri_schema['uniqueIdField']['name'])
+            unique_field_id = A2Database.sqlstr(esri_schema['uniqueIdField']['name'])
         else:
             msg = f'Unsupported "uniqueIdField" type found for {table_name} (expected object)'
             raise TypeError(msg)
@@ -596,161 +577,38 @@ def process_layer_table(esri_schema: dict, relationships: list) -> dict:
     return {'tables': tables, 'indexes': indexes, 'values': values}
 
 
-def db_table_exists(cursor, table_name: str, conn) -> bool:
-    """Returns whether the table exists using the connection parameter
-    Arguments:
-        cursor: the database cursor
-        table_name: the name of the table to check existance for
-        conn: the database connector
-    Returns:
-        Returns True if the table exists and False if not
-    """
-    query = 'SELECT table_schema, table_name FROM INFORMATION_SCHEMA.TABLES WHERE ' \
-            'table_schema = %s AND table_name = %s'
-
-    cursor.execute(query, (conn.database, table_name))
-
-    _ = cursor.fetchall()
-
-    return cursor.rowcount > 0
-
-
-def db_drop_table(cursor, table_name: str, opts: dict, conn) -> None:
-    """Drops the specified table from the database. Will remove any foreign keys dependent
-       upon the table
-    Arguments:
-        cursor: the database cursor
-        table_name: the name of the table to drop
-        opts: command line options
-        conn: the database connection
-    """
-    # Find and remove any foreign key that point to this table
-    query = 'SELECT table_name, constraint_name FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE ' \
-            'referenced_table_schema = %s AND referenced_table_name=%s'
-    cursor.execute(query, (conn.database, table_name))
-    fks = {}
-    for parent_table_name, constraint_name in cursor:
-        if parent_table_name not in fks:
-            fks[parent_table_name] = [constraint_name]
-        else:
-            fks[parent_table_name].append(constraint_name)
-    for parent_table_name, names in fks.items():
-        for one_name in names:
-            query = f'ALTER TABLE {parent_table_name} DROP FOREIGN KEY {one_name}'
-            if 'verbose' in opts and opts['verbose']:
-                print(f'  {query}', flush=True)
-            cursor.execute(query)
-            cursor.reset()
-
-    # Drop the table itself
-    query = f'DROP TABLE {table_name}'
-    if 'verbose' in opts and opts['verbose']:
-        print(f'  {query}', flush=True)
-    cursor.execute(query)
-    cursor.reset()
-
-
-def db_create_table(cursor, table: dict, opts: dict) -> None:
-    """Creates a new table in the database
-    Arguments:
-        cursor: the database cursor
-        table: the internal information used to creagte/update a table
-        opts: command line options
-    Returns:
-        Returns a list containing new foreign keys and indexes (in that order). The list
-        may contain None or an empty tuple for the foreign keys and indexes
-    """
-    # Declare variables
-    table_name = _sql_str(table["name"])
-
-    # Open the statement to create the table
-    query = f'CREATE TABLE {table_name} ('
-    query_cols = []
-    query_add = []
-
-    # Process the columns
-    for one_col in table['columns']:
-        col_name = one_col["name"]
-
-        # Be sure to prefix a space before appending strings to the SQL
-        # The order of processing the parameters is important (eg: NOT NULL)
-        col_sql = f'{col_name} {one_col["type"]}'
-        if 'null_allowed' in one_col and isinstance(one_col['null_allowed'], bool):
-            if not one_col['null_allowed']:
-                col_sql += ' NOT NULL'
-
-        if 'srid' in one_col and one_col['srid']:
-            if 'mysql_version' not in opts or opts['mysql_version'][0] >= 8:
-                col_sql += f' SRID {one_col["srid"]}'
-
-        if 'primary' in one_col and one_col['primary']:
-            col_sql += ' PRIMARY KEY'
-
-        if 'auto_increment' in one_col and one_col['auto_increment']:
-            col_sql += ' AUTO_INCREMENT'
-
-        if 'default' in one_col and one_col['default'] is not None:
-            col_sql += f' DEFAULT {one_col["default"]}'
-
-        if 'comment' in one_col and one_col['comment']:
-            col_sql += f' COMMENT \'{one_col["comment"]}\''
-
-        if 'foreign_key' in one_col and one_col['foreign_key']:
-            fk_info = one_col['foreign_key']
-            query_add.append(f'FOREIGN KEY ({col_name}) REFERENCES ' \
-                                        f'{fk_info["reference"]}({fk_info["reference_col"]})')
-
-        if 'index' in one_col and one_col['index']:
-            if 'is_spatial' in one_col and one_col['is_spatial']:
-                query_add.append(f'SPATIAL INDEX({col_name})')
-            else:
-                query_add.append(f'INDEX {table_name}_' + _get_name_uuid() + f'_idx ({col_name})')
-
-        query_cols.append(col_sql)
-
-    # Join the SQL and close the statement
-    query += ','.join(query_cols + query_add)
-    query += ')'
-
-    if 'verbose' in opts and opts['verbose']:
-        print(f'db_create_table: {table_name}', flush=True)
-        print(f'    {query}', flush=True)
-    cursor.execute(query)
-
-    cursor.reset()
-
-
-def db_process_table(cursor, table: dict, conn, opts: dict) -> None:
+def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     """Processes the information for a table and creates or updates the table as needed
     Arguments:
-        cursor: the database cursor
-        table: the internal information used to creagte/update a table
         conn: the database connector
+        table: the internal information used to creagte/update a table
         opts: contains other command line options
     Exceptions:
         Raises a RuntimeError if the table already exists
     """
+    verbose = 'verbose' in opts and opts['verbose']
+
     print(f'Processing table: {table["name"]}', flush=True)
     # Check if the table already exists
-    if db_table_exists(cursor, table['name'], conn):
+    if conn.table_exists(table['name']):
         if 'force' not in opts or not opts['force']:
             raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
                                 'please remove it before trying again')
 
         print(f'Forcing the drop of table {table["name"]}', flush=True)
-        db_drop_table(cursor, table["name"], opts, conn)
+        conn.drop_table(table['name'], verbose)
 
     # Create the table
-    db_create_table(cursor, table, opts)
+    conn.create_table(table['name'], table['columns'], verbose)
 
 
-def find_matching_index(cursor, table_name: str, index_column_names: list, conn) -> Optional[str]:
+def find_matching_index(conn: A2Database, table_name: str, index_column_names: list) \
+        -> Optional[str]:
     """Tries to find a matching index in the database
     Arguments:
-        cursor: the database cursor
+        conn: the database connection
         table_name: the name of the table to look at
         index_column_names: the list of column names to match
-        conn: the database connection
     Return:
         Returns the name of a found matching index or None
     """
@@ -759,8 +617,8 @@ def find_matching_index(cursor, table_name: str, index_column_names: list, conn)
     # Setup for index verification check
     query = 'SELECT index_name, column_name FROM INFORMATION_SCHEMA.STATISTICS WHERE ' \
             'table_schema = %s AND table_name = %s ORDER BY seq_in_index ASC'
-    cursor.execute(query, (conn.database, table_name))
-    for (index_name, column_name) in cursor:
+    conn.execute(query, (conn.database, table_name))
+    for (index_name, column_name) in conn.cursor:
         if not index_name in found_indexes:
             found_indexes[index_name] = [column_name]
         else:
@@ -781,12 +639,11 @@ def find_matching_index(cursor, table_name: str, index_column_names: list, conn)
     return index_to_remove
 
 
-def db_process_indexes(cursor, indexes: tuple, conn, opts: dict) -> None:
+def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
     """Added indexes to tables where they don't already exist
     Arguments:
-        cursor: the database cursor
-        indexes: the indexes to process
         conn: the database connector
+        indexes: the indexes to process
         opts: contains other command line options
     """
     # Process the indexes one at a time
@@ -794,7 +651,7 @@ def db_process_indexes(cursor, indexes: tuple, conn, opts: dict) -> None:
         index_column_names = set(one_index['column_names'])
         print(f'Processing index for table: {one_index["table"]}', index_column_names, flush=True)
 
-        matching_index = find_matching_index(cursor, one_index['table'], index_column_names, conn)
+        matching_index = find_matching_index(conn, one_index['table'], index_column_names)
         if matching_index:
             if 'force' not in opts or not opts['force'] or matching_index == 'PRIMARY':
                 continue
@@ -802,8 +659,8 @@ def db_process_indexes(cursor, indexes: tuple, conn, opts: dict) -> None:
             print(f'Forcing removal of matching index \'{matching_index}\'', flush=True)
             try:
                 query = f'DROP INDEX {matching_index} ON {one_index["table"]}'
-                cursor.execute(query)
-                cursor.reset()
+                conn.execute(query)
+                conn.reset()
             except mysql.connector.errors.DatabaseError as ex:
                 print('Warning: Unable to remove matching index:', ex, flush=True)
                 print('    Skipping re-creation of index')
@@ -833,19 +690,20 @@ def db_process_indexes(cursor, indexes: tuple, conn, opts: dict) -> None:
         if 'verbose' in opts and opts['verbose']:
             print(f'db_process_indexes: {idx_name}', flush=True)
             print(f'    {query} ({query_fields})', flush=True)
-        cursor.execute(query, query_fields)
+        conn.execute(query, query_fields)
 
-        cursor.reset()
+        conn.reset()
 
 
-def db_process_values(cursor, values: tuple, conn, opts: dict) -> None:
+def db_process_values(conn: A2Database, values: tuple, opts: dict) -> None:
     """Adds the additional data to the database
     Arguments:
-        cursor: the database cursor
-        values: list of prepared values to insert into the database
         conn: the database connector
+        values: list of prepared values to insert into the database
         opts: contains other command line options
     """
+    verbose = 'verbose' in opts and opts['verbose']
+
     # Process each set of data for each table
     print('Processing values for tables', flush=True)
     processed = {}
@@ -857,17 +715,10 @@ def db_process_values(cursor, values: tuple, conn, opts: dict) -> None:
         for one_value in one_update['values']:
             processed[table_name] = processed[table_name] + 1
 
-            col_names = ','.join(one_value.keys())
-            col_values = list(one_value[key] for key in one_value.keys())
-            col_params_sql = list(('%s',)) * len(list(col_values))
-            col_values_sql = ','.join(col_params_sql)
-            query = f'INSERT INTO {table_name} ({col_names}) VALUES({col_values_sql})'
-
-            if 'verbose' in opts and opts['verbose']:
-                print(f'db_process_values: {table_name}', flush=True)
-                print(f'    {query}', flush=True)
-                print(f'    {col_values}', flush=True)
-            cursor.execute(query, col_values)
+            conn.add_update_data(table_name, one_value.keys(),
+                            list(one_value[key] for key in one_value.keys()),
+                            col_alias={},
+                            verbose=verbose)
 
     conn.commit()
 
@@ -875,30 +726,28 @@ def db_process_values(cursor, values: tuple, conn, opts: dict) -> None:
         print(f'   {key}: {val} rows added', flush=True)
 
 
-def update_database(cursor, schema: list, conn, opts: dict) -> None:
+def update_database(conn: A2Database, schema: list, opts: dict) -> None:
     """Updates the database by adding and changing database objects
     Arguments:
-        cursor: the database cursor
+        conn: the database connection
         schema: a list of database objects to create or update
-        conn: the database connector
         opts: contains other command line options
     """
-
     for one_schema in schema:
         # Process all the tables first
         try:
             for one_table in one_schema['tables']:
-                db_process_table(cursor, one_table, conn, opts)
+                db_process_table(conn, one_table, opts)
         except RuntimeError as ex:
             print('Error', ex, flush=True)
             print('Specify the -f flag to force the removal of existing tables', flush=True)
             sys.exit(200)
 
         # Process indexes
-        db_process_indexes(cursor, one_schema['indexes'], conn, opts)
+        db_process_indexes(conn, one_schema['indexes'], opts)
 
         # Process any values
-        db_process_values(cursor, one_schema['values'], conn, opts)
+        db_process_values(conn, one_schema['values'], opts)
 
 
 def create_update_database(schema_data: dict, opts: dict = None) -> None:
@@ -921,9 +770,13 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         print('Missing required command line database parameters', flush=True)
         sys.exit(100)
 
+    # Get the user password if they need to specify one
+    if opts['password'] is not False:
+        opts['password'] = getpass()
+
     # MySQL connection
     try:
-        db_conn = mysql.connector.connect(
+        db_conn = a2database.connect(
             host=opts["host"],
             database=opts["database"],
             password=opts["password"],
@@ -933,15 +786,6 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         print('Error', ex, flush=True)
         print('Please correct errors and try again', flush=True)
         sys.exit(101)
-
-    cursor = db_conn.cursor()
-
-    # Get the database version and add it to the options
-    cursor.execute('SELECT VERSION()')
-    cur_row = next(cursor)
-    if cur_row:
-        opts['mysql_version'] = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
-    cursor.reset()
 
     try:
         # Process any layers
@@ -967,7 +811,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         raise
 
     # Processes the discovered database objects
-    update_database(cursor, layers + tables, db_conn, opts)
+    update_database(db_conn, layers + tables, opts)
 
 
 if __name__ == "__main__":

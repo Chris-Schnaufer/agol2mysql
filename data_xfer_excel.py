@@ -10,6 +10,18 @@ import openpyxl
 from openpyxl import load_workbook
 import mysql.connector
 
+import a2database
+from a2database import A2Database
+
+# Check if we have the geometry transformation module
+try:
+    from osgeo import ogr
+    from osgeo import osr
+except ModuleNotFoundError:
+    GEOM_CAN_TRANSFORM = False
+else:
+    GEOM_CAN_TRANSFORM = True
+
 # The name of our script
 SCRIPT_NAME = os.path.basename(__file__)
 
@@ -59,7 +71,13 @@ ARGPARSE_COL_NAMES_HELP = 'Comma seperated list of column names (used when colum
 ARGPARSE_PRIMARY_KEY_HELP = 'The name of the primary key to use when checking if data is ' \
                             f'already in the database (default "{DEFAULT_PRIMARY_KEY_NAME}"). ' \
                             'Also needs to be a column in the spreadsheet'
-# Help text for verbose fla g
+# Help for specifying columns that are to be considered point columns
+ARGPARSE_POINT_COLS_HELP = 'The names of the X and Y columns in the spreadsheet that represent ' \
+                           'a point type when creating a schema ("<x name>,<y name>")'
+# Help for specifying the EPSG code that the point coordinates are in
+ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric values ' \
+                           f'(default is {DEFAULT_GEOM_EPSG})'
+# Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
 
 
@@ -93,21 +111,21 @@ def get_arguments() -> tuple:
     parser.add_argument('--col_names_row', type=int, default=DEFAULT_COL_NAMES_ROW,
                         help=ARGPARSE_COL_NAMES_ROW_HELP)
     parser.add_argument('--col_names', help=ARGPARSE_COL_NAMES_HELP)
+    parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
+    parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
+                        help=ARGPARSE_GEOMETRY_EPSG_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
-    excel_file, user_password = None, None
+    excel_file = None
     if not args.excel_file:
         # Raise argument error
         raise ValueError('Missing a required argument')
 
     if len(args.excel_file) == 1:
         excel_file = args.excel_file[0]
-    elif len(args.excel_file) == 2:
-        user_password = args.excel_file[0]
-        excel_file = args.excel_file[1]
     else:
         # Report the problem
         print('Too many arguments specified for input file', flush=True)
@@ -122,20 +140,19 @@ def get_arguments() -> tuple:
         print(f'Unable to open EXCEL file {excel_file}', flush=True)
         sys.exit(11)
 
-    # Check if we need to prompt for the password
-    if args.password and not user_password:
-        user_password = getpass()
-
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
                 'host': args.host,
                 'database': args.database,
                 'user': args.user,
-                'password': user_password,
+                'password': args.password,
                 'header_lines': args.header,
                 'col_names_row': args.col_names_row,
                 'col_names': tuple(one_name.strip() for one_name in args.col_names.split(',')) \
                                         if args.col_names else None,
+                'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
+                'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
+                'geometry_epsg': args.geometry_epsg,
                 'primary_key': args.key_name
                }
 
@@ -143,197 +160,84 @@ def get_arguments() -> tuple:
     return excel_file, cmd_opts
 
 
-def check_data_exists(table_name: str, col_names: tuple, col_values: tuple, geom_col_info: dict, \
-                      cursor, opts: dict) -> bool:
-    """Checks if the data already exists in the database
+def transform_points(from_epsg: int, to_epsg: int, values: tuple) -> list:
+    """Returns the list with the last num_values converted to the new coordinate system
     Arguments:
-        table_name: the name of the table to check
-        col_names: the names of the column i the table
-        col_values: the values to use for checking
-        geom_col_info: optional information on a geometry column
-        cursor: the database cursor
-        opts: additional options
+        from_epsg: original EPSG code
+        to_epsg: EPSG code to transform the points to
+        values: the list of values to transform (assumes X1, Y1, X2, Y2, ...)
     Returns:
-        Returns True if the data is found and False if not
+        The list of transformed values
     """
-    primary_key = opts['primary_key'] if 'primary_key' in opts else None
+    if len(values) % 2 or len(values) < 1:
+        raise ValueError('Unable to transform points, an even number of X,Y values pairs ' \
+                         'are needed')
 
-    # Perform parameter checks
-    if not len(col_names) == len(col_values):
-        raise ValueError('The number of columns doesn\'t match the number of values ' \
-                         f'in table {table_name}')
-    if primary_key and not primary_key in col_names:
-        print(f'Warning: Specified primary key name "{primary_key}" not found in ' \
-              f'table "{table_name}"', flush=True)
-        print('    Defaulting to checking every column', flush=True)
-        primary_key = None
+    # Make sure we can transform points
+    if not GEOM_CAN_TRANSFORM:
+        raise ValueError('Unable to transform points, supporting osgeo module is not installed')
 
-    # Determine what columns we're checking
-    if primary_key:
-        check_cols = (primary_key,)
-    else:
-        if not geom_col_info:
-            check_cols = col_names
-        else:
-            # Strip out the column names that belong to geometry
-            check_cols = tuple(one_name for one_name in col_names if one_name not in \
-                                                                geom_col_info['sheet_cols'])
+    # Transform the points
+    return_values = []
+    idx = 0
+    from_sr = osr.SpatialReference()
+    from_sr.ImportFromEPSG(int(from_epsg))
+    to_sr = osr.SpatialReference()
+    to_sr.ImportFromEPSG(int(to_epsg))
+    transform = osr.CreateCoordinateTransformation(from_sr, to_sr)
+    while idx < len(values):
+        cur_geom = ogr.CreateGeometryFromWkt(f'POINT({values[idx]} {values[idx+1]} {from_epsg})')
+        cur_geom.Transform(transform)
+        return_values.extend((cur_geom.GetX(), cur_geom.GetY()))
+        idx = idx + 2
 
-    # Start building the query
-    query = f'SELECT count(1) FROM {table_name} WHERE ' + \
-                ' AND '.join((f'{one_name}=%s' for one_name in check_cols))
-
-    # Build up the values to pass
-    query_values = list(col_values[col_names.index(one_name)] for one_name in check_cols)
-
-    # Build up the geometry portion of the query
-    if geom_col_info and not primary_key:
-        query += f' AND {geom_col_info["table_column"]}={geom_col_info["col_sql"]}'
-        query_values.extend((col_values[col_names.index(one_name)] for one_name in \
-                                                                    geom_col_info["sheet_cols"]))
-
-    # Run the query and determine if we have a row or not
-    if 'verbose' in opts and opts['verbose']:
-        print(query, query_values, flush=True)
-    cursor.execute(query, query_values)
-
-    res = cursor.fetchone()
-    cursor.reset()
-
-    if res and len(res) > 0 and res[0] == 1:
-        return True
-
-    return False
+    return return_values
 
 
-def add_update_data(table_name: str, col_names: tuple, col_values: tuple, geom_col_info:dict, \
-                    col_alias: dict, cursor, update: bool, opts: dict) -> None:
-    """Adds or updated data in a table
+def transform_geom_cols(col_names: tuple, col_values: tuple, geom_col_info: dict, from_epsg: int, \
+                        to_epsg: int) -> list:
+    """Transforms geometry point to the specified coordinate system
     Arguments:
-        table_name: the name of the table to add to/update
-        col_names: the name of the columns to add/update
-        col_values: the column values to use
-        geom_col_info: information on the geometry column
-        col_alias: alias information on columns
-        cursor: the database cursor
-        update: flag indicating whether to update or insert a row of data
-        opts: additional options
+        col_name: the column names of the table
+        col_values: the values associated with the column names
+        geom_col_info: the geometry column information
+        from_epsg: the EPSG code to tranform from
+        to_epsg: the EPSG code to transform to
+    Return:
+        Returns a list of column values with the geometry values transformed
     """
-    # Setup the column names and values including any geometry columns
-    if geom_col_info:
-        # Without geom column
-        query_cols = list((one_name for one_name in col_names if \
-                                            one_name not in geom_col_info['sheet_cols']))
-        query_types = list(('%s' for one_name in query_cols))
-        query_values = list((col_values[col_names.index(one_name)] for one_name in query_cols if \
-                                                    not one_name in geom_col_info['sheet_cols']))
-        # Adding in geom column
-        query_cols.append(geom_col_info['table_column'])
-        query_types.append(geom_col_info['col_sql'])
-        query_values.extend((col_values[col_names.index(one_name)] \
-                                                    for one_name in geom_col_info['sheet_cols']))
-    else:
-        query_cols = col_names
-        query_types = list(('%s' for one_name in query_cols))
-        query_values = list(col_values)
+    # Check if we can avoid the transformations
+    if from_epsg == to_epsg:
+        return list(col_values)
+    if len(geom_col_info['sheet_cols']) % 2:
+        raise ValueError('Invalid number of X,Y column name pairs specified')
 
-    # Check for alias on a column name
-    query_cols = list((one_name if not one_name in col_alias else col_alias[one_name] \
-                                                                    for one_name in query_cols))
+    pt_indexes = []
+    pt_values = []
+    idx = 0
+    while idx < len(geom_col_info['sheet_cols']):
+        x_idx = col_names.index(geom_col_info['sheet_cols'][idx])
+        y_idx = col_names.index(geom_col_info['sheet_cols'][idx+1])
+        pt_indexes.append(x_idx)
+        pt_indexes.append(y_idx)
+        pt_values.append(col_values[x_idx])
+        pt_values.append(col_values[y_idx])
+        idx += 2
 
-    # Generate the SQL
-    if update:
-        query = f'UPDATE {table_name} SET '
-        query += ', '.join((f'{query_cols[idx]}={query_types[idx]}' \
-                                    for idx in range(0, len(query_cols)) \
-                                        if query_cols[idx].lower() != opts["primary_key"].lower()))
-        query += f' WHERE {opts["primary_key"]} = %s'
+    new_pt_values = transform_points(from_epsg, to_epsg, pt_values)
 
-        # Remove the primary key from the regular list of values
-        primary_key_index = next((idx for idx in range(0, len(query_cols)) \
-                                        if query_cols[idx].lower() == opts["primary_key"].lower()))
-        query_values = query_values[:primary_key_index] + query_values[primary_key_index+1:]
-        query_values = list(query_values)+list((col_values[col_names.index(opts["primary_key"])],))
-    else:
-        query = f'INSERT INTO {table_name} (' + ','.join(query_cols) + ') VALUES (' + \
-                        ','.join(query_types) + ')'
+    return_values = list(col_values)
+    for idx, idx_val in enumerate(pt_indexes):
+        return_values[idx_val] = new_pt_values[idx]
 
-    # Run the query
-    if 'verbose' in opts and opts['verbose']:
-        print(query, query_values, flush=True)
-    cursor.execute(query, query_values)
-    cursor.reset()
+    return return_values
 
 
-def get_col_info(table_name: str, col_names: tuple, cursor, conn) -> tuple:
-    """Returns information on the columns in the specified table
-    Arguments:
-        table_name: the name of the table
-        col_names: the names of the columns in the table
-        cursor: the database cursor
-        conn: the database connection
-    Returns:
-        Returns a tuple with information on the geometry column as a dict (or None if one 
-        isn't found) and any column name aliases
-    """
-    known_geom_types = [
-                        'GEOMETRY',
-                        'POINT',
-                        'LINESTRING',
-                        'POLYGON',
-                        'MULTIPOINT',
-                        'MULTILINESTRING',
-                        'MULTIPOLYGON',
-                        'GEOMETRYCOLLECTION'
-                       ]
-
-    query = 'SELECT column_name,column_type,column_comment FROM INFORMATION_SCHEMA.COLUMNS WHERE ' \
-            'table_schema = %s  AND table_name=%s'
-    cursor.execute(query, (conn.database, table_name))
-
-    # Try and find a geometry column while collecting comments with aliases
-    col_aliases = {}
-    found_col, found_type = None, None
-    for col_name, col_type, col_comment in cursor:
-        # Check for geometry
-        if isinstance(col_type, bytes):
-            col_type_str = col_type.decode("utf-8").upper()
-        else:
-            col_type_str = col_type.upper()
-        if col_type_str in known_geom_types:
-            found_col = col_name
-            found_type = col_type_str
-        # Check for an alias and strip it out of the comment
-        if col_comment and col_comment.startswith('ALIAS:'):
-            alias_name = col_comment.split('[')[1].split(']')[0]
-            col_aliases[alias_name] = col_name
-
-    if not found_col:
-        return None, col_aliases
-
-    # Assemble the geometry type information
-    return_info = None
-    match(found_type):
-        case 'POINT':
-            if all(expected_col in col_names for expected_col in ('x', 'y')):
-                return_info = {'table_column': found_col,
-                               'col_sql': f'ST_GeomFromText(\'POINT(%s %s)\', {DEFAULT_GEOM_EPSG})',
-                               'sheet_cols': ('x', 'y')
-                              }
-        # Add other cases here
-
-    if not return_info:
-        raise ValueError(f'Unsupported geometry column found {found_col} of type ' \
-                         f'{found_type} in table {table_name}')
-
-    return return_info, col_aliases
-
-
-def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, cursor, conn, opts: dict) -> None:
+def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Database, opts: dict) \
+                    -> None:
     """Uploads the data in the worksheet
     Arguments:
         sheet: the worksheet to upload
-        cursor: the database cursor
         conn: the database connection
         opts: additional options
     """
@@ -360,7 +264,8 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, cursor, conn, o
             col_names.append(one_col.value)
 
     # Find geometry columns
-    geom_col_info, col_alias = get_col_info(table_name, col_names, cursor, conn)
+    geom_col_info, col_alias = conn.get_col_info(table_name, col_names, opts['geometry_epsg'],
+                                            colX1=opts['point_col_x'], rowY1=opts['point_col_y'])
 
     # Process the rows
     skipped_rows = 0
@@ -369,15 +274,20 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, cursor, conn, o
         col_values = tuple(one_cell.value for one_cell in one_row)
 
         # Check for existing data and skip this row if it exists and we're not forcing
-        data_exists = check_data_exists(table_name, col_names, col_values, geom_col_info, \
-                                        cursor, opts)
+        data_exists = conn.check_data_exists(table_name, col_names, col_values, geom_col_info, \
+                                            primary_key=opts['primary_key'],
+                                            verbose=opts['verbose'] if 'verbose' in opts else False)
         if data_exists and not opts['force']:
             skipped_rows = skipped_rows + 1
             continue
 
         added_updated_rows = added_updated_rows + 1
-        add_update_data(table_name, col_names, col_values, geom_col_info, col_alias, cursor, \
-                        data_exists, opts)
+        if geom_col_info and conn.epsg != opts['geometry_epsg']:
+            col_values = transform_geom_cols(col_names, col_values, geom_col_info, \
+                                             opts['geometry_epsg'], conn.epsg)
+        conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
+                             update=data_exists, \
+                             primary_key=opts['primary_key'], verbose=opts['verbose'])
 
     if skipped_rows:
         print('    Processed', added_updated_rows + skipped_rows, \
@@ -401,9 +311,13 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         print('Missing required command line database parameters', flush=True)
         sys.exit(100)
 
+    # Get the user password if they need to specify one
+    if opts['password'] is not False:
+        opts['password'] = getpass()
+
     # MySQL connection
     try:
-        db_conn = mysql.connector.connect(
+        db_conn = a2database.connect(
             host=opts["host"],
             database=opts["database"],
             password=opts["password"],
@@ -414,14 +328,8 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         print('Please correct errors and try again', flush=True)
         sys.exit(101)
 
-    cursor = db_conn.cursor()
-
-    # Get the database version and add it to the options
-    cursor.execute('SELECT VERSION()')
-    cur_row = next(cursor)
-    if cur_row:
-        opts['mysql_version'] = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
-    cursor.reset()
+    # Set the default database EPSG
+    db_conn.epsg = DEFAULT_GEOM_EPSG
 
     # Open the EXCEL file and process each tab
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
@@ -429,7 +337,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
     print(f'Updating using {filepath}')
 
     for one_sheet in workbook.worksheets:
-        process_sheet(one_sheet, cursor, db_conn, opts)
+        process_sheet(one_sheet, db_conn, opts)
 
     db_conn.commit()
 
