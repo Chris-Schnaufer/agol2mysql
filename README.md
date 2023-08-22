@@ -1,6 +1,8 @@
 # About
 This project has the scripts that can help you move your AGOL data to a MySQL database.
 
+Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database and executing queries using SQL Workbench
+
 # Prerequisites
 The scripts in this repository use Python3.10 or later.
 To check what Python version you have, open a console window and type the following command.
