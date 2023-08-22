@@ -7,8 +7,7 @@ To acceess the database you will need the following information which will be pr
 - An active [CALS](https://cales.arizona.edu/) VPN connection
 - The address and port number of the MySQL server
 - The username and password to use to access the data in the database
-- The name of the database (RedSQ)
-- Use "redsq" for *Default Schema* (without the double quotes)
+- The name of the database (redsq)
 
 The server and user information will be provided via a secure method 
 
@@ -24,6 +23,7 @@ Open the [Setup New Connection](https://dev.mysql.com/doc/workbench/en/wb-gettin
 - Set *Connection Name* to "Red Squirrel" (without the double quotes)
 - Change *Hostname*, *Port*, and *Username* to what was provided to you
 - You can save the password in the Keychain if desired, otherwise you will need to provide the password each time you log into the server
+- Use "redsq" for *Default Schema* (without the double quotes)
 
 Before dismissing the dialog, test the connection to confirm that the information was correctly entered
 
@@ -31,7 +31,12 @@ Before dismissing the dialog, test the connection to confirm that the informatio
 
 On the [Home Screen](https://dev.mysql.com/doc/workbench/en/wb-home.html) tab, click on the **Red Squirrel** tile to connect to the database
 
-Open a [SQL Query tab](https://dev.mysql.com/doc/workbench/en/wb-sql-editor.html) and enter your query into the *SQL Query Panel*.
-For example, "SELECT * FROM cvd_age"
+If necessary, open a [SQL Query tab](https://dev.mysql.com/doc/workbench/en/wb-sql-editor.html) 
+
+Enter your query into the *SQL Query Panel*.
+For example,
+```sql
+SELECT * FROM cvd_age;
+```
 
 Click the *Execute* button to run the query (represented by a plain lightning bolt)
