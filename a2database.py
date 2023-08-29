@@ -411,14 +411,14 @@ class A2Database:
         self._cursor.execute(query)
         self._cursor.reset()
 
-    def create_table(self, table_name: str, col_info: tuple, verbose: bool=False) -> None:
+    def create_table(self, table_name: str, col_info: tuple, verbose: bool=False) -> tuple:
         """Creates a table based upon the information passed in
         Arguments:
             table_name: name of the table to create
             col_info: a list of column information for the table
             verbose: prints query information if set to True
         Notes:
-            Accepted keys for each column information in the col_info list are: 
+            Referenced keys for each column information dict in the col_info list are: 
                 'name': str: the column name
                 'type': str: the database type of the column
                 'null_allowed': bool: column allows NULL values
@@ -430,8 +430,15 @@ class A2Database:
                 'foreign_key': {'reference': <referenced table name>, 'reference_col': \
                                 <referenced column name>}: foreign key definition
                 'index': bool: create an index on the column
-                'is_spatial': bool: is spatial
+                'is_spatial': bool: is a spatial column when True
+        Return:
+            A tuple containing a dict of the foreign key column with the name of the referenced
+            table and column as a tuple (in that order), and a dict of index names and a list of 
+            their associated column names.
         """
+        fks_created = {}
+        idx_created = {}
+
         # Declare variables
         table_name = A2Database._sqlstr(table_name)
 
@@ -457,6 +464,7 @@ class A2Database:
 
             if 'primary' in one_col and one_col['primary']:
                 col_sql += ' PRIMARY KEY'
+                idx_created['PRIMARY'] = (col_name,)
 
             if 'auto_increment' in one_col and one_col['auto_increment']:
                 col_sql += ' AUTO_INCREMENT'
@@ -471,13 +479,16 @@ class A2Database:
                 fk_info = one_col['foreign_key']
                 query_add.append(f'FOREIGN KEY ({col_name}) REFERENCES ' \
                                             f'{fk_info["reference"]}({fk_info["reference_col"]})')
+                fks_created[col_name] = (fk_info['reference'], fk_info['reference_col'])
 
             if 'index' in one_col and one_col['index']:
                 if 'is_spatial' in one_col and one_col['is_spatial']:
                     query_add.append(f'SPATIAL INDEX({col_name})')
+                    idx_created[col_name] = (col_name,)
                 else:
-                    query_add.append(f'INDEX {table_name}_' + self._get_name_uuid() + \
-                                            f'_idx ({col_name})')
+                    idx_name = f'{table_name}_' + self._get_name_uuid() + '_idx'
+                    query_add.append(f'INDEX {idx_name} ({col_name})')
+                    idx_created[idx_name] = (col_name,)
 
             query_cols.append(col_sql)
 
@@ -485,7 +496,103 @@ class A2Database:
         query += ','.join(query_cols + query_add)
         query += ')'
 
+        if verbose:
+            print(query, flush=True)
 
+        self._cursor.execute(query)
+        self._cursor.reset()
+
+        return fks_created, idx_created
+
+    def view_exists(self, view_name: str) -> bool:
+        """Returns whether the view exists using the connection parameter
+        Arguments:
+            view_name: the name of the view to check existance for
+        Returns:
+            Returns True if the view exists and False if not
+        """
+        view_name = A2Database._sqlstr(view_name)
+
+        query = 'SELECT table_schema, table_name FROM INFORMATION_SCHEMA.TABLES WHERE ' \
+                'table_schema = %s AND table_name = %s'
+
+        self._cursor.execute(query, (self._conn.database, view_name))
+
+        _ = self._cursor.fetchall()
+
+        return self._cursor.rowcount > 0
+
+    def drop_view(self, view_name: str, verbose: bool=False) -> None:
+        """Drops the view from the database
+        Arguments:
+            view_name: the name of the view to create
+            verbose: prints query information if set to True
+        """
+        if self.view_exists(view_name):
+            query = f'DROP VIEW {self.sqlstr(view_name)}'
+
+            if verbose:
+                print(query, flush=True)
+
+            self._cursor.execute(query)
+            self._cursor.reset()
+
+    def create_view(self, view_name: str, table_name: str, col_info: tuple, verbose: bool=False) \
+                    -> None:
+        """Creates a view based upon the information passed in
+        Arguments:
+            view_name: the name of the view to create
+            table_name: name of the table to use for the view
+            col_info: a tuple of column information for the table
+            verbose: prints query information if set to True
+        Notes:
+            Referenced keys for each column information dict in the col_info list are: 
+                'name': str: the column name
+                'type': str: the database type of the column
+                'null_allowed': bool: column allows NULL values
+                'srid': int: the SRID of a geometry column
+                'primary': bool: the column is a primary key
+                'auto_increment': bool: the column auto-increments
+                'default': ?: optional default value for the column (type matches column type)
+                'comment': str: optional comment string
+                'foreign_key': {'reference': <referenced table name>,
+                                'reference_col': <referenced column name>,
+                                'display_col': <display column name>}: foreign key definition
+                'index': bool: create an index on the column
+                'is_spatial': bool: is a spatial column when True
+        """
+        clean_table_name = A2Database._sqlstr(table_name)
+        joins = []
+
+        # Build up the basic query
+        query = f'CREATE OR REPLACE VIEW {A2Database._sqlstr(view_name)} AS SELECT '
+        col_separator = ' '
+        for one_col in col_info:
+            col_name = A2Database._sqlstr(one_col['name'])
+
+            if 'foreign_key' not in one_col or not one_col['foreign_key']:
+                query += f'{col_separator} {clean_table_name}.{col_name} AS {col_name}'
+            else:
+                fk_info = one_col['foreign_key']
+                if 'display_col' in fk_info and fk_info['display_col']:
+                    query += col_separator + \
+                                f'{fk_info["reference"]}.{fk_info["display_col"]} AS {col_name}'
+                else:
+                    query += col_separator + \
+                                f'{fk_info["reference"]}.{fk_info["reference_col"]} AS {col_name}'
+                join_sql = f'LEFT JOIN {fk_info["reference"]} ON ' + \
+                                f'{clean_table_name}.{col_name} = ' + \
+                                f'{fk_info["reference"]}.{fk_info["reference_col"]}'
+                joins.append(join_sql)
+
+            col_separator = ', '
+
+        query += f' FROM {A2Database._sqlstr(clean_table_name)} '
+
+        # Append to the query
+        query += ' '.join(joins)
+
+        # Run the query
         if verbose:
             print(query, flush=True)
 
