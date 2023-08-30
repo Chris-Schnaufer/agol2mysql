@@ -49,6 +49,10 @@ ARGPARSE_JSON_FILE_HELP = 'Path to the JSON file containing the ESRI exported La
 ARGPARSE_FORCE_HELP = 'Force the recreation of the scheme - Will Delete Existing Data!'
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display the SQL commands as they are executed'
+# Help for supressing the creation of views
+ARGPARSE_NOVIEWS_HELP = 'For tables created with foreign keys, do not create an associated ' \
+                        'view that resolves the foreign keys. Associated views are created by ' \
+                        'default'
 
 
 def _get_name_uuid() -> str:
@@ -84,6 +88,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_VERBOSE_HELP)
     parser.add_argument('-p', '--password', action='store_true',
                         help=ARGPARSE_PASSWORD_HELP)
+    parser.add_argument('--noviews', action='store_true',
+                        help=ARGPARSE_NOVIEWS_HELP)
     args = parser.parse_args()
 
     # Find the JSON file and the password (which is allowed to be eliminated)
@@ -117,7 +123,8 @@ def get_arguments() -> tuple:
                 'host': args.host,
                 'database': args.database,
                 'user': args.user,
-                'password': args.password
+                'password': args.password,
+                'noviews': args.noviews
                }
 
     # Return the loaded JSON
@@ -199,7 +206,7 @@ def get_enum(domain: dict) -> list:
     Arguments:
         domain: the ESRI declaraction of a data type
     Returns:
-        A list consisting of a table declaration, 
+        A list consisting of a table declaration dict, and a list of values
     """
     # Declare required fields
     req_fields = ('type', 'name')
@@ -236,8 +243,15 @@ def get_enum(domain: dict) -> list:
         index = index + 1
 
     # Return the necessary information (new table info, and other returns)
-    return ({'name': table_name, 'primary_col_name': 'code', 'columns': table_cols},
-            {'table': table_name, 'values': new_values}  # Data insert info
+    return ({
+             'name': table_name,
+             'primary_col_name': 'code',
+             'display_col_name': 'name', 
+             'columns': table_cols
+            },{
+             'table': table_name, 
+             'values': new_values
+            }  # Data insert info
            )
 
 
@@ -297,7 +311,8 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
                 make_index = True
                 foreign_key = {'col_name': col_name,
                                'reference': enum_table['name'],
-                               'reference_col': enum_table['primary_col_name']
+                               'reference_col': enum_table['primary_col_name'],
+                               'display_col': enum_table['display_col_name']
                               }
             elif 'length' in col:
                 col_len = int(col['length'])
@@ -599,7 +614,15 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
         conn.drop_table(table['name'], verbose)
 
     # Create the table
-    conn.create_table(table['name'], table['columns'], verbose)
+    new_fks, _ = conn.create_table(table['name'], table['columns'], verbose)
+
+    # Create a view if foreign keys were created as part of the table
+    if new_fks:
+        view_name = table['name'] + '_view'
+        if ('noviews' not in opts or not opts['noviews']):
+            conn.create_view(view_name, table['name'], table['columns'], verbose)
+        elif 'force' in opts and opts['force']:
+            conn.drop_view(view_name)
 
 
 def find_matching_index(conn: A2Database, table_name: str, index_column_names: list) \

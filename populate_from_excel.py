@@ -472,6 +472,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     cnt = 1
     while cnt < opts['data_col_names_row']:
         _ = next(rows_iter)
+        cnt = cnt + 1
     # Get the names
     for one_col in next(rows_iter):
         col_names.append(one_col.value)
@@ -503,10 +504,8 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
 
         added_updated_rows = added_updated_rows + 1
         if geom_col_info and conn.epsg != opts['geometry_epsg']:
-            print('HACK GEOM',len(col_names), len(col_values), flush=True)
             col_values = transform_geom_cols(col_names, col_values, geom_col_info, \
                                              opts['geometry_epsg'], conn.epsg)
-        print('HACK',len(col_names), len(col_values), flush=True)
         conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
                              update=data_exists, \
                              primary_key=opts['primary_key'], verbose=opts['verbose'])
