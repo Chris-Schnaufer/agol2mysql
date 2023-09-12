@@ -116,6 +116,10 @@ ARGPARSE_POINT_COLS_HELP = 'The names of the X and Y columns in the spreadsheet 
 # Help for specifying the EPSG code that the point coordinates are in
 ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric values ' \
                            f'(default is {DEFAULT_GEOM_EPSG})'
+# Help for supressing the creation of views
+ARGPARSE_NOVIEWS_HELP = 'For tables created with geometry, do not create an associated ' \
+                        'view that breaks out the different values. Associated views are ' \
+                        'created by default when a geometry is present'
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
 
@@ -166,6 +170,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
+    parser.add_argument('--noviews', action='store_true',
+                        help=ARGPARSE_NOVIEWS_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -222,7 +228,8 @@ def get_arguments() -> tuple:
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
-                'primary_key': args.key_name
+                'primary_key': args.key_name,
+                'noviews': args.noviews
                }
 
     # Return the loaded JSON
@@ -312,31 +319,31 @@ def map_col_type(col_type: str, raise_on_error: bool=False) -> str:
     Exceptions:
         Raises an IndexError if the type is not known
     """
-    col_type = None
+    col_ret_type = None
     match col_type:
         case 'Number':
-            col_type = 'DOUBLE'
+            col_ret_type = 'DOUBLE'
 
         case 'Short Text':
-            col_type = 'VARCHAR(255)'
+            col_ret_type = 'VARCHAR(255)'
 
         case 'Date/Time':
-            col_type = 'TIMESTAMP'
+            col_ret_type = 'TIMESTAMP'
 
         case 'Yes/No':
-            col_type = 'TINYINT'
+            col_ret_type = 'TINYINT'
 
         case 'POINT':
-            col_type = 'POINT'
+            col_ret_type = 'POINT'
 
-    if col_type is None and raise_on_error:
+    if col_ret_type is None and raise_on_error:
         raise IndexError(f'Unknown column type {col_type} found')
 
-    return col_type
+    return col_ret_type
 
 
 def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet.Worksheet, \
-                     col_names: tuple, opts:dict, conn: A2Database) -> None:
+                     col_names: tuple, opts: dict, conn: A2Database) -> None:
     """Updates the database schema
     Arguments:
         table_name: the name of the table
@@ -426,7 +433,7 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
             'is_primary': is_primary,
             'auto_increment': is_primary,       # Primary keys auto-increment
             'description': one_row[col_desc_idx].value,
-            'not_null': False,
+            'null_allowed': not is_primary,
             'index': is_primary                 # Primary keys are indexed
             })
 
@@ -435,8 +442,9 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
         col_info.append({
             'name': 'geom',
             'type': 'POINT',
+            'is_spatial': True,
             'description': 'Auto-generated column',
-            'not_null': True,
+            'null_allowed': False,
             'index': True
             })
 
@@ -446,6 +454,14 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
 
     # Create the table
     conn.create_table(table_name, col_info, verbose)
+
+    # Create a view if we have grometries
+    if point_col_names:
+        view_name = table_name + '_view'
+        if ('noviews' not in opts or not opts['noviews']):
+            conn.create_view(view_name, table_name, col_info, verbose)
+        elif 'force' in opts and opts['force']:
+            conn.drop_view(view_name)
 
 
 def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
@@ -480,7 +496,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     # Add/Change the schema
     if schema_sheet:
         db_update_schema(table_name, schema_sheet, col_names, opts, conn)
-        print(f'    Updated the schema for {table_name}')
+        print(f'    Updated the schema for {table_name}', flush=True)
         if opts["schema_only"]:
             return
 

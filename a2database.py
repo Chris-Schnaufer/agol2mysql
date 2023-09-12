@@ -3,6 +3,7 @@
 
 import uuid
 from typing import Any
+from typing import Optional
 import mysql.connector
 
 def connect(user: str = None, password: str = None, host: str = None, database: str = None):
@@ -161,6 +162,29 @@ class A2Database:
         for one_char in A2Database._restricted_chars:
             ret_str = ret_str.replace(one_char, replacement)
         return ret_str
+
+    @staticmethod
+    def _get_view_spatial_query_cols(geom_type: str, table_name: str, col_name: str) \
+                                    -> Optional[str]:
+        """Returns the query columns for an exploded view of the geometry type
+        Arguments:
+            geom_type: the PostGIS geometry type
+            table_name: the name of the table
+            col_name: the name of the geomtry column
+        Returns:
+            Returns the SQL fragment with exploded geometry information (such as X, Y, SRID)
+            along with the original geometry column. None is returned if the geomety type
+            is not supported
+        """
+        return_sql = None
+        match geom_type.lower():
+            case 'point':
+                return_sql = f'{table_name}.{col_name} as {col_name}, ' \
+                             f'st_x({table_name}.{col_name}) as {col_name}_x, ' \
+                             f'st_y({table_name}.{col_name}) as {col_name}_y, ' \
+                             f'st_srid({table_name}.{col_name}) as {col_name}_srid'
+
+        return return_sql
 
     @property
     def verbose(self):
@@ -571,7 +595,17 @@ class A2Database:
             col_name = A2Database._sqlstr(one_col['name'])
 
             if 'foreign_key' not in one_col or not one_col['foreign_key']:
-                query += f'{col_separator} {clean_table_name}.{col_name} AS {col_name}'
+                if 'is_spatial' not in one_col or not one_col['is_spatial']:
+                    query += f'{col_separator} {clean_table_name}.{col_name} AS {col_name}'
+                else:
+                    return_sql = A2Database._get_view_spatial_query_cols(one_col['type'],
+                                                                clean_table_name, col_name)
+                    if return_sql is None:
+                        raise ValueError(f'Unsupported geometry column type found ' \
+                                         f'"{one_col["type"]}" in column ' \
+                                         f'"{clean_table_name}.{col_name}" while creating ' \
+                                         f'view "{view_name}"')
+                    query += col_separator + return_sql
             else:
                 fk_info = one_col['foreign_key']
                 if 'display_col' in fk_info and fk_info['display_col']:
