@@ -186,6 +186,61 @@ class A2Database:
 
         return return_sql
 
+    @staticmethod
+    def _same_type_and_len(db_col_name: str, db_col_size: int, col_type: str,
+                          size_opt: bool=False) -> bool:
+        """Returns whether the column name and size match the column type
+        Arguments:
+            db_col_name: the name of the database column
+            db_col_size: a size attribute of the column
+            col_type: the column type definition to check against
+            size_opt: when True, the size specification is optional
+        Returns:
+            Returns Trus if the definitions appear to be the same, and False otherwise
+        """
+        col_name = col_type.split('(')[0] if '(' in col_type else col_type
+        if db_col_name.casefold() != col_name.casefold():
+            return False
+
+        # Check column size, if it's missing and optional we're OK. Otherwise the sizes
+        # need to be the same
+        col_size = int(col_type.split('(')[1].rstrip(')')) if '(' in col_type else None
+        if col_size is None:
+            if not size_opt:
+                return False
+        elif col_size != db_col_size:
+            return False
+
+        return True
+
+    @staticmethod
+    def _cols_match(db_col_type: str, db_col_len: str, db_numeric_len: str, col_type: str) -> bool:
+        """Returns the comparison of the database column information against the
+           current column type
+        Arguments:
+            db_col_type: the type of the column from the database
+            db_col_len: optional length of a type (having length is type dependent)
+            col_type: the column type definition
+        Returns:
+            Returns True if the type definitions are considered to be the same, and False
+            otherwise
+        """
+        match(db_col_type.lower()):
+            case 'char' | 'varchar' | 'binary' | 'varbinary'| 'tinyblob'| 'blob' | 'tinytext' \
+                    | 'text':
+                if A2Database._same_type_and_len(db_col_type, int(db_col_len), col_type,
+                                                size_opt=True):
+                    return True
+            # TODO: case 'enum':
+            # TODO: case 'set':
+            case 'decimal' | 'numeric' | 'bit':
+                if A2Database._same_type_and_len(db_col_type, int(db_numeric_len), col_type):
+                    return True
+            case _:
+                if col_type.casefold() == db_col_type.casefold():
+                    return True
+        return False
+
     @property
     def verbose(self):
         """Returns the verbosity of the database calls """
@@ -401,13 +456,87 @@ class A2Database:
 
         return self._cursor.rowcount > 0
 
-    def drop_table(self, table_name: str, verbose: bool=False) -> None:
+    def table_cols_match(self, table_name: str, col_info: tuple, verbose: bool=None) -> bool:
+        """Determines if the current columns in the database table matches the specification
+        Arguments:
+            table_name: the name of the table to drop
+            col_info: see create_table() for the list of fields used
+            verbose: override default for printing query information (prints if True)
+        """
+        if verbose is None:
+            verbose = self._verbose
+
+        table_name = A2Database._sqlstr(table_name)
+
+        query = 'SELECT column_name, data_type, character_maximum_length, column_key, ' \
+                'column_comment, numeric_scale, is_nullable=\'YES\', ' \
+                '(extra like \'%auto_increment%\') as auto_increment, ' \
+                'column_default FROM ' \
+                'INFORMATION_SCHEMA.COLUMNS WHERE table_schema = %s AND table_name=%s'
+
+        self._cursor.execute(query, (self._conn.database, table_name))
+
+        #_ = self._cursor.fetchall()
+
+        # Prepare to loop through the data
+        col_indexes = {A2Database._sqlstr(col_val['name']):col_idx for col_idx, col_val in \
+                                                enumerate(col_info)}
+
+        # Loop through the columns returned
+        # column_key = 'PRI'
+        found_cols = []
+        for col_name, col_type, col_char_max_len, col_key, _, numeric_scale, \
+                                is_nullable, auto_increment, column_default in self._cursor:
+            if not col_name in col_indexes:
+                if verbose:
+                    print(f'Table "{table_name}" column "{col_name}" is not found in new ' \
+                           'table definition')
+                return False
+            # Get the matched column information by name
+            match_col = col_info[col_indexes[col_name]]
+
+            if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
+                                            match_col['type']):
+                return False
+
+            if 'null_allowed' in match_col and bool(is_nullable) != bool(match_col['null_allowed']):
+                return False
+
+            if 'primary' in match_col and (col_key == 'PRI') != bool(match_col['primary']):
+                return False
+
+            if 'auto_increment' in match_col and bool(auto_increment) != bool(match_col['auto_increment']):
+                return False
+
+            if 'default' in match_col and match_col['default'] is not None and \
+                            column_default.casefold() != match_col['default'].casefold():
+                return False
+
+            found_cols.append(col_name.casefold())
+
+        self._cursor.reset()
+
+        # Make sure we found everything that's specified in the column definitions
+        if verbose and not len(found_cols) == len(col_info):
+            extra_cols = set((A2Database._sqlstr(col_val['name']).casefold() for \
+                                col_val in col_info))
+            extra_cols = extra_cols - set(found_cols)
+            print(f'Table {table_name} has fewer defined columns than it\'s definition')
+            for one_col in extra_cols:
+                print(f'    {one_col}')
+        return len(found_cols) == len(col_info)
+
+    def drop_table(self, table_name: str, verbose: bool=None, readonly: bool=False) -> None:
         """Drops the specified table from the database. Will remove any foreign keys dependent
            upon the table
         Arguments:
             table_name: the name of the table to drop
-            verbose: prints query information if set to True
+            verbose: override default for printing query information (prints if True)
+            readonly: don't execute SQL statements that modify the database
         """
+        if verbose is None:
+            verbose = self._verbose
+
         table_name = A2Database._sqlstr(table_name)
 
         # Find and remove any foreign key that point to this table
@@ -425,22 +554,27 @@ class A2Database:
                 query = f'ALTER TABLE {parent_table_name} DROP FOREIGN KEY {one_name}'
                 if verbose is True:
                     print(f'  {query}', flush=True)
-                self._cursor.execute(query)
-                self._cursor.reset()
+                if not readonly:
+                    self._cursor.execute(query)
+                    self._cursor.reset()
 
         # Drop the table itself
         query = f'DROP TABLE {table_name}'
         if verbose is True:
             print(f'  {query}', flush=True)
-        self._cursor.execute(query)
-        self._cursor.reset()
 
-    def create_table(self, table_name: str, col_info: tuple, verbose: bool=False) -> tuple:
+        if not readonly:
+            self._cursor.execute(query)
+            self._cursor.reset()
+
+    def create_table(self, table_name: str, col_info: tuple, verbose: bool=None,
+                     readonly: bool=False) -> tuple:
         """Creates a table based upon the information passed in
         Arguments:
             table_name: name of the table to create
             col_info: a list of column information for the table
-            verbose: prints query information if set to True
+            verbose: override default for printing query information (prints if True)
+            readonly: don't execute SQL statements that modify the database
         Notes:
             Referenced keys for each column information dict in the col_info list are: 
                 'name': str: the column name
@@ -460,6 +594,9 @@ class A2Database:
             table and column as a tuple (in that order), and a dict of index names and a list of 
             their associated column names.
         """
+        if verbose is None:
+            verbose = self._verbose
+
         fks_created = {}
         idx_created = {}
 
@@ -523,8 +660,9 @@ class A2Database:
         if verbose:
             print(query, flush=True)
 
-        self._cursor.execute(query)
-        self._cursor.reset()
+        if not readonly:
+            self._cursor.execute(query)
+            self._cursor.reset()
 
         return fks_created, idx_created
 
@@ -546,29 +684,34 @@ class A2Database:
 
         return self._cursor.rowcount > 0
 
-    def drop_view(self, view_name: str, verbose: bool=False) -> None:
+    def drop_view(self, view_name: str, verbose: bool=None, readonly: bool=False) -> None:
         """Drops the view from the database
         Arguments:
             view_name: the name of the view to create
-            verbose: prints query information if set to True
+            verbose: override default for printing query information (prints if True)
+            readonly: don't execute SQL statements that modify the database
         """
+        if verbose is None:
+            verbose = self._verbose
         if self.view_exists(view_name):
             query = f'DROP VIEW {self.sqlstr(view_name)}'
 
             if verbose:
                 print(query, flush=True)
 
-            self._cursor.execute(query)
-            self._cursor.reset()
+            if not readonly:
+                self._cursor.execute(query)
+                self._cursor.reset()
 
-    def create_view(self, view_name: str, table_name: str, col_info: tuple, verbose: bool=False) \
-                    -> None:
+    def create_view(self, view_name: str, table_name: str, col_info: tuple, verbose: bool=None,
+                    readonly: bool=False) -> None:
         """Creates a view based upon the information passed in
         Arguments:
             view_name: the name of the view to create
             table_name: name of the table to use for the view
             col_info: a tuple of column information for the table
-            verbose: prints query information if set to True
+            verbose: override default for printing query information (prints if True)
+            readonly: don't execute SQL statements that modify the database
         Notes:
             Referenced keys for each column information dict in the col_info list are: 
                 'name': str: the column name
@@ -585,6 +728,9 @@ class A2Database:
                 'index': bool: create an index on the column
                 'is_spatial': bool: is a spatial column when True
         """
+        if verbose is None:
+            verbose = self._verbose
+
         clean_table_name = A2Database._sqlstr(table_name)
         joins = []
 
@@ -630,11 +776,12 @@ class A2Database:
         if verbose:
             print(query, flush=True)
 
-        self._cursor.execute(query)
-        self._cursor.reset()
+        if not readonly:
+            self._cursor.execute(query)
+            self._cursor.reset()
 
     def check_data_exists(self, table_name: str, col_names: tuple, col_values: tuple, \
-                          geom_col_info: dict=None, primary_key: str=None, verbose: bool=False) \
+                          geom_col_info: dict=None, primary_key: str=None, verbose: bool=None) \
                            -> bool:
         """Checks if the data already exists in the database
         Arguments:
@@ -643,7 +790,7 @@ class A2Database:
             col_values: the values to use for checking
             geom_col_info: optional information on a geometry column
             primary_key: optional primary key column name
-            verbose: prints query information if set to True
+            verbose: override default for printing query information (prints if True)
         Returns:
             Returns True if the data is found and False if not
         Exceptions:
@@ -657,6 +804,9 @@ class A2Database:
                           are the X, Y, and EPSG column names for a point
             'table_column': the geometry column name in the target table
         """
+        if verbose is None:
+            verbose = self._verbose
+
         table_name = A2Database._sqlstr(table_name)
 
         # Perform parameter checks
@@ -707,7 +857,8 @@ class A2Database:
 
     def add_update_data(self, table_name: str, col_names: tuple, col_values: tuple, \
                         col_alias: dict, geom_col_info: dict=None, \
-                        update: bool=False, primary_key: str=None, verbose: bool=False) -> None:
+                        update: bool=False, primary_key: str=None, verbose: bool=None,
+                        readonly: bool=False) -> None:
         """Adds or updated data in a table. Caller needs to commit the data after al the data is
            uploaded
         Arguments:
@@ -719,7 +870,8 @@ class A2Database:
             geom_col_info: information on the geometry column
             update: flag indicating whether to update or insert a row of data
             primary_key: the primary key column name to use when updating a record
-            verbose: set to True to print information on the query used
+            verbose: override default for printing query information (prints if True)
+            readonly: don't execute SQL statements that modify the database
         Notes:
             The required key names and value descriptions in geom_col_info are:
             'col_sql': the SQL fragment representing the geometry including any coordinate system
@@ -729,6 +881,9 @@ class A2Database:
                           are the X, Y, and EPSG column names for a point
             'table_column': the geometry column name in the target table
         """
+        if verbose is None:
+            verbose = self._verbose
+
         table_name = A2Database._sqlstr(table_name)
         primary_key = A2Database._sqlstr(primary_key) if primary_key is not None else None
 
@@ -777,5 +932,7 @@ class A2Database:
         # Run the query
         if verbose:
             print(query, query_values, flush=True)
-        self._cursor.execute(query, query_values)
-        self._cursor.reset()
+
+        if not readonly:
+            self._cursor.execute(query, query_values)
+            self._cursor.reset()

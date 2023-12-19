@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-""" This script movs data from an EXCEL spreadsheet to a MySql database
+""" This script movs data from an ESRI EXCEL spreadsheet to a MySql database
 """
 
 import os

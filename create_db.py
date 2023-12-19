@@ -53,6 +53,9 @@ ARGPARSE_VERBOSE_HELP = 'Display the SQL commands as they are executed'
 ARGPARSE_NOVIEWS_HELP = 'For tables created with foreign keys, do not create an associated ' \
                         'view that resolves the foreign keys. Associated views are created by ' \
                         'default'
+# Help for read only mode - no DB changes
+ARGPARSE_READONLY_HELP = 'Don\'t run the SQL commands that modify the database. ' \
+                         'Can be combined with verbose'
 
 
 def _get_name_uuid() -> str:
@@ -90,6 +93,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_PASSWORD_HELP)
     parser.add_argument('--noviews', action='store_true',
                         help=ARGPARSE_NOVIEWS_HELP)
+    parser.add_argument('--readonly', action='store_true',
+                        help=ARGPARSE_READONLY_HELP)
     args = parser.parse_args()
 
     # Find the JSON file and the password (which is allowed to be eliminated)
@@ -124,7 +129,8 @@ def get_arguments() -> tuple:
                 'database': args.database,
                 'user': args.user,
                 'password': args.password,
-                'noviews': args.noviews
+                'noviews': args.noviews,
+                'readonly': args.readonly
                }
 
     # Return the loaded JSON
@@ -602,27 +608,39 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
         Raises a RuntimeError if the table already exists
     """
     verbose = 'verbose' in opts and opts['verbose']
+    readonly = 'readonly' in opts and opts['readonly']
 
     print(f'Processing table: {table["name"]}', flush=True)
     # Check if the table already exists
+    matches = False
     if conn.table_exists(table['name']):
-        if 'force' not in opts or not opts['force']:
-            raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
-                                'please remove it before trying again')
+        matches = conn.table_cols_match(table['name'], table['columns'], verbose)
+        if not matches:
+            if ('force' not in opts or not opts['force']) and not readonly:
+                raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
+                                    'please remove it before trying again')
 
-        print(f'Forcing the drop of table {table["name"]}', flush=True)
-        conn.drop_table(table['name'], verbose)
+            if not readonly:
+                print(f'Forcing the drop of table {table["name"]}', flush=True)
+            else:
+                print(f'READONLY: table {table["name"]} exists and would need the force ' \
+                       'flag specified', flush=True)
+                print('          continuing in read only mode...', flush=True)
+            conn.drop_table(table['name'], verbose, readonly=readonly)
+        else:
+            print(f'Table {table["name"]} already exists and matches definition')
 
     # Create the table
-    new_fks, _ = conn.create_table(table['name'], table['columns'], verbose)
+    if not matches:
+        new_fks, _ = conn.create_table(table['name'], table['columns'], verbose, readonly=readonly)
 
-    # Create a view if foreign keys were created as part of the table
-    if new_fks:
-        view_name = table['name'] + '_view'
-        if ('noviews' not in opts or not opts['noviews']):
-            conn.create_view(view_name, table['name'], table['columns'], verbose)
-        elif 'force' in opts and opts['force']:
-            conn.drop_view(view_name)
+        # Create a view if foreign keys were created as part of the table
+        if new_fks:
+            view_name = table['name'] + '_view'
+            if ('noviews' not in opts or not opts['noviews']):
+                conn.create_view(view_name, table['name'], table['columns'], verbose, readonly=readonly)
+            elif 'force' in opts and opts['force']:
+                conn.drop_view(view_name, readonly=readonly)
 
 
 def find_matching_index(conn: A2Database, table_name: str, index_column_names: list) \
@@ -726,6 +744,7 @@ def db_process_values(conn: A2Database, values: tuple, opts: dict) -> None:
         opts: contains other command line options
     """
     verbose = 'verbose' in opts and opts['verbose']
+    print('DB_PROCESS_VALUES: ', opts, flush=True)
 
     # Process each set of data for each table
     print('Processing values for tables', flush=True)
@@ -741,7 +760,8 @@ def db_process_values(conn: A2Database, values: tuple, opts: dict) -> None:
             conn.add_update_data(table_name, one_value.keys(),
                             list(one_value[key] for key in one_value.keys()),
                             col_alias={},
-                            verbose=verbose)
+                            verbose=verbose,
+                            readonly=opts['readonly'])
 
     conn.commit()
 
@@ -835,6 +855,8 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
 
     # Processes the discovered database objects
     update_database(db_conn, layers + tables, opts)
+
+    print('Completed processing JSON file' + (' in READONLY mode' if opts['readonly'] else ''))
 
 
 if __name__ == "__main__":
