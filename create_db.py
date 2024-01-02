@@ -598,6 +598,22 @@ def process_layer_table(esri_schema: dict, relationships: list) -> dict:
     return {'tables': tables, 'indexes': indexes, 'values': values}
 
 
+def find_table_pk(table_name: str, tables: tuple) -> Optional[str]:
+    """Tries to find the primary key associated with the table name
+    Arguments:
+        table_name: the name of the table of interest
+        tables: the list of internal table definitions
+    Returns:
+        Returns the found primary key nane, or None if one isn't found
+    """
+    for one_table in tables:
+        if one_table['name'] == table_name:
+            for one_column in one_table['columns']:
+                if 'primary' in one_column and one_column['primary']:
+                    return one_column['name']
+    return None
+
+
 def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     """Processes the information for a table and creates or updates the table as needed
     Arguments:
@@ -638,7 +654,8 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
         if new_fks:
             view_name = table['name'] + '_view'
             if ('noviews' not in opts or not opts['noviews']):
-                conn.create_view(view_name, table['name'], table['columns'], verbose, readonly=readonly)
+                conn.create_view(view_name, table['name'], table['columns'], verbose,
+                                 readonly=readonly)
             elif 'force' in opts and opts['force']:
                 conn.drop_view(view_name, readonly=readonly)
 
@@ -687,6 +704,8 @@ def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
         indexes: the indexes to process
         opts: contains other command line options
     """
+    readonly = 'readonly' in opts and opts['readonly']
+
     # Process the indexes one at a time
     for one_index in indexes:
         index_column_names = set(one_index['column_names'])
@@ -694,20 +713,23 @@ def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
 
         matching_index = find_matching_index(conn, one_index['table'], index_column_names)
         if matching_index:
-            if 'force' not in opts or not opts['force'] or matching_index == 'PRIMARY':
+            if ('force' not in opts or not opts['force'] or matching_index == 'PRIMARY') \
+                        and not readonly:
                 continue
             # Remove the index
-            print(f'Forcing removal of matching index \'{matching_index}\'', flush=True)
-            try:
-                query = f'DROP INDEX {matching_index} ON {one_index["table"]}'
-                conn.execute(query)
-                conn.reset()
-            except mysql.connector.errors.DatabaseError as ex:
-                print('Warning: Unable to remove matching index:', ex, flush=True)
-                print('    Skipping re-creation of index')
-                if 'verbose' in opts and opts['verbose']:
-                    print(f'   {query}')
-                continue
+            print('READONLY: ' if readonly else '',
+                    f'Forcing removal of matching index \'{matching_index}\'', flush=True)
+            query = f'DROP INDEX {matching_index} ON {one_index["table"]}'
+            if not readonly:
+                try:
+                    conn.execute(query)
+                    conn.reset()
+                except mysql.connector.errors.DatabaseError as ex:
+                    print('Warning: Unable to remove matching index:', ex, flush=True)
+                    print('    Skipping re-creation of index')
+                    if 'verbose' in opts and opts['verbose']:
+                        print(f'   {query}')
+                    continue
 
         # Prepare to create the query string
         idx_name = one_index['table'] + '_' + _get_name_uuid() + '_idx'
@@ -731,20 +753,21 @@ def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
         if 'verbose' in opts and opts['verbose']:
             print(f'db_process_indexes: {idx_name}', flush=True)
             print(f'    {query} ({query_fields})', flush=True)
-        conn.execute(query, query_fields)
+        if not readonly:
+            conn.execute(query, query_fields)
+            conn.reset()
 
-        conn.reset()
 
-
-def db_process_values(conn: A2Database, values: tuple, opts: dict) -> None:
+def db_process_values(conn: A2Database, values: tuple, tables: tuple, opts: dict) -> None:
     """Adds the additional data to the database
     Arguments:
         conn: the database connector
         values: list of prepared values to insert into the database
+        tables: list of tables in the database - used to find primary key
         opts: contains other command line options
     """
     verbose = 'verbose' in opts and opts['verbose']
-    print('DB_PROCESS_VALUES: ', opts, flush=True)
+    readonly = 'readonly' in opts and opts['readonly']
 
     # Process each set of data for each table
     print('Processing values for tables', flush=True)
@@ -754,19 +777,52 @@ def db_process_values(conn: A2Database, values: tuple, opts: dict) -> None:
         if not table_name in processed:
             processed[table_name] = 0
 
+        # Find the primary key name for the table
+        primary_key = find_table_pk(table_name, tables)
+        if primary_key is None:
+            print('WARNING: {table_name} does not have a primary key, inserting all rows')
+
+        # Process each row for the table
         for one_value in one_update['values']:
             processed[table_name] = processed[table_name] + 1
 
-            conn.add_update_data(table_name, one_value.keys(),
-                            list(one_value[key] for key in one_value.keys()),
-                            col_alias={},
-                            verbose=verbose,
-                            readonly=opts['readonly'])
+            col_names = list(one_value.keys())
+            col_values = list(one_value[key] for key in one_value.keys())
+            data_match = conn.check_data_exists(table_name,
+                                 col_names,
+                                 col_values,
+                                 primary_key=None, # Full row value check
+                                 verbose=verbose)
 
-    conn.commit()
+            # Skip matching data
+            if data_match:
+                print('    Skipping row with exact match')
+                continue
+
+            # If we have a primary key, determine if this is an update or an insert
+            if primary_key:
+                update_data = conn.check_data_exists(table_name,
+                                     col_names,
+                                     col_values,
+                                     primary_key=primary_key,
+                                     verbose=verbose)
+            else:
+                update_data = False
+
+            conn.add_update_data(table_name,
+                            col_names,
+                            col_values,
+                            col_alias={},
+                            update=update_data,
+                            primary_key=primary_key,
+                            verbose=verbose,
+                            readonly=readonly)
+
+    if not readonly:
+        conn.commit()
 
     for key, val in processed.items():
-        print(f'   {key}: {val} rows added', flush=True)
+        print(f'   {key}: {val} rows processed', flush=True)
 
 
 def update_database(conn: A2Database, schema: list, opts: dict) -> None:
@@ -790,7 +846,7 @@ def update_database(conn: A2Database, schema: list, opts: dict) -> None:
         db_process_indexes(conn, one_schema['indexes'], opts)
 
         # Process any values
-        db_process_values(conn, one_schema['values'], opts)
+        db_process_values(conn, one_schema['values'], one_schema['tables'], opts)
 
 
 def create_update_database(schema_data: dict, opts: dict = None) -> None:

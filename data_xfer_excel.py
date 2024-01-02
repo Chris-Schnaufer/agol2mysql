@@ -140,6 +140,8 @@ def get_arguments() -> tuple:
         print(f'Unable to open EXCEL file {excel_file}', flush=True)
         sys.exit(11)
 
+    print('HACK: ',args.point_cols)
+
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
                 'host': args.host,
@@ -274,7 +276,8 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         col_values = tuple(one_cell.value for one_cell in one_row)
 
         # Check for existing data and skip this row if it exists and we're not forcing
-        data_exists = conn.check_data_exists(table_name, col_names, col_values, geom_col_info, \
+        data_exists = conn.check_data_exists(table_name, col_names, col_values,
+                                            geom_col_info=geom_col_info,
                                             primary_key=opts['primary_key'],
                                             verbose=opts['verbose'] if 'verbose' in opts else False)
         if data_exists and not opts['force']:

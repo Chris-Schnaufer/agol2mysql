@@ -37,6 +37,7 @@ class A2Database:
         """Handles closing the connection and other cleanup
         """
         if self._cursor is not None:
+            self._cursor.reset()
             self._cursor.close()
             self._cursor = None
         if self._conn is not None:
@@ -349,9 +350,6 @@ class A2Database:
 
         return False
 
-#    def check_data_exists(tablename: str, columnnames: tuple, columnvalues: tuple) -> bool:
-#        """Checks if a record exists by comparing columns to values"""
-
     def get_col_info(self, table_name: str, col_names: tuple, geometry_epsg: int, **kwargs) \
                      -> tuple:
         """Returns alias information on the columns in the specified table and a found
@@ -505,7 +503,8 @@ class A2Database:
             if 'primary' in match_col and (col_key == 'PRI') != bool(match_col['primary']):
                 return False
 
-            if 'auto_increment' in match_col and bool(auto_increment) != bool(match_col['auto_increment']):
+            if 'auto_increment' in match_col and bool(auto_increment) != \
+                                                            bool(match_col['auto_increment']):
                 return False
 
             if 'default' in match_col and match_col['default'] is not None and \
@@ -781,13 +780,15 @@ class A2Database:
             self._cursor.reset()
 
     def check_data_exists(self, table_name: str, col_names: tuple, col_values: tuple, \
-                          geom_col_info: dict=None, primary_key: str=None, verbose: bool=None) \
-                           -> bool:
+                          col_alias: dict=None, geom_col_info: dict=None, primary_key: str=None, \
+                          verbose: bool=None) -> bool:
         """Checks if the data already exists in the database
         Arguments:
             table_name: the name of the table to check
             col_names: the names of the column in the table
             col_values: the values to use for checking
+            col_alias: alias information on columns consisting of column alias' as keys with
+                       database column names as values. e.g.: {'alias': 'column nanme'}
             geom_col_info: optional information on a geometry column
             primary_key: optional primary key column name
             verbose: override default for printing query information (prints if True)
@@ -827,6 +828,12 @@ class A2Database:
                 # Strip out the column names that belong to geometry (for now)
                 check_cols = tuple(one_name for one_name in col_names \
                                 if one_name not in geom_col_info['sheet_cols'])
+
+        # Check for column alias's and make the switch where needed
+        if col_alias:
+            # Check for alias on a column name
+            check_cols = tuple((one_name if not one_name in col_alias else col_alias[one_name] \
+                                                                        for one_name in check_cols))
 
         # Start building the query
         query = f'SELECT count(1) FROM {table_name} WHERE ' + \

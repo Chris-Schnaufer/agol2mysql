@@ -31,20 +31,26 @@ DEFAULT_HOST_NAME = 'localhost'
 # Default number of heading lines in the EXCEL file
 DEFAULT_NUM_HEADER_LINES = 1
 
-# Default row that has the column names
+# Default row that starts the column names
 DEFAULT_COL_NAMES_ROW = 1
 
 # The default primary key database name for the sheet data
 DEFAULT_PRIMARY_KEY_NAME = 'UAID'
 
+# The default column name of the schema table names
+DEFAULT_SCHEMA_TABLE_NAME_COL='Table Name'
+
 # The default column name of the schema field names
 DEFAULT_SCHEMA_FIELD_NAME_COL = 'Field Name'
 
 # The default column name of the schema data type
-DEFAULT_SCHEMA_DATA_TYPE_COL = 'Data Type'
+DEFAULT_SCHEMA_DATA_TYPE_COL = 'Type'
+
+# The default column name of the schema data type length
+DEFAULT_SCHEMA_DATA_LEN_COL = 'Size'
 
 # The default column name of the schema data type
-DEFAULT_SCHEMA_DESCRIPTION_COL = 'Description (Optional)'
+DEFAULT_SCHEMA_DESCRIPTION_COL = 'Description'
 
 # Default EPSG code for points
 DEFAULT_GEOM_EPSG = 4326
@@ -90,18 +96,26 @@ ARGPARSE_COL_NAMES2_ROW_HELP = 'Specify the row that contains the column names f
 # The help to indicate that only the schema is to be created and no data loaded
 ARGPARSE_SCHEMA_ONLY = 'Specify this flag if only the schema is to be created or updated and no ' \
                        'data loaded'
+# Sheet column containing the table field names in the schema sheet
+ARGPARSE_SCHEMA_TABLE_NAME_COL_HELP = 'The column name containing the schema table names ' \
+                            f'(default name is "{DEFAULT_SCHEMA_TABLE_NAME_COL}"). You ' \
+                            'can also specify the numerical index of the column (starting at 1)'
 # Sheet column containing the table column names in the schema sheet
 ARGPARSE_SCHEMA_FIELD_NAME_COL_HELP = 'The column name containing the schema field names ' \
                             f'(default name is "{DEFAULT_SCHEMA_FIELD_NAME_COL}"). You ' \
-                            'can also specify the numerical index of the sheet (starting at 1)'
+                            'can also specify the numerical index of the column (starting at 1)'
 # Sheet column containing the column data types in the schema sheet
 ARGPARSE_SCHEMA_DATA_TYPE_COL_HELP = 'The column name containing the schema data types (default ' \
                             f'name is "{DEFAULT_SCHEMA_DATA_TYPE_COL}"). You can also specify ' \
-                            'the numerical index of the sheet (starting at 1)'
+                            'the numerical index of the column (starting at 1)'
+# Sheet column containing the column data type lengths in the schema sheet
+ARGPARSE_SCHEMA_DATA_LEN_COL_HELP = 'The column name containing the schema data type lengths ' \
+                            f'(default name is "{DEFAULT_SCHEMA_DATA_LEN_COL}"). You can also ' \
+                            'specify the numerical index of the column (starting at 1)'
 # Sheet column containing the column description in the schema sheet
 ARGPARSE_SCHEMA_DESCRIPTION_COL_HELP = 'The column name containing the schema description column ' \
                             f'(default name is "{DEFAULT_SCHEMA_DESCRIPTION_COL}"). You can also ' \
-                            'specify the numerical index of the sheet (starting at 1)'
+                            'specify the numerical index of the column (starting at 1)'
 # Help text for using all defined columns in the schema sheet when creating the table
 ARGPARSE_USE_SCHEMA_COLS_HELP = 'Specify if all the defined columns in the schema sheet should ' \
                             'be used when creating the schema. Defaults to only creating the ' \
@@ -122,7 +136,10 @@ ARGPARSE_NOVIEWS_HELP = 'For tables created with geometry, do not create an asso
                         'created by default when a geometry is present'
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
-
+# Help text for ignore column parameters
+ARGPARSE_IGNORE_COL = 'A column to ignore when loading the data. You can also specify the ' \
+                      'numerical index of the column (starting at 1). Can use multiple times ' \
+                      'on the command line'
 
 def get_arguments() -> tuple:
     """ Returns the data from the parsed command line arguments
@@ -156,10 +173,14 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_HEADER2_HELP)
     parser.add_argument('-sc', '--schema_col_names_row', type=int, default=DEFAULT_COL_NAMES_ROW,
                         help=ARGPARSE_COL_NAMES2_ROW_HELP)
+    parser.add_argument('-stn', '--schema_table_name_col', default=DEFAULT_SCHEMA_TABLE_NAME_COL,
+                        help=ARGPARSE_SCHEMA_TABLE_NAME_COL_HELP)
     parser.add_argument('-sfn', '--schema_field_name_col', default=DEFAULT_SCHEMA_FIELD_NAME_COL,
                         help=ARGPARSE_SCHEMA_FIELD_NAME_COL_HELP)
     parser.add_argument('-sft', '--schema_data_type_col', default=DEFAULT_SCHEMA_DATA_TYPE_COL,
                         help=ARGPARSE_SCHEMA_DATA_TYPE_COL_HELP)
+    parser.add_argument('-sfl', '--schema_data_len_col', default=DEFAULT_SCHEMA_DATA_LEN_COL,
+                        help=ARGPARSE_SCHEMA_DATA_LEN_COL_HELP)
     parser.add_argument('-sfd', '--schema_description_col',
                         default=DEFAULT_SCHEMA_DESCRIPTION_COL,
                         help=ARGPARSE_SCHEMA_DESCRIPTION_COL_HELP)
@@ -172,6 +193,7 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     parser.add_argument('--noviews', action='store_true',
                         help=ARGPARSE_NOVIEWS_HELP)
+    parser.add_argument('--ignore_col', nargs='*', action='extend', help=ARGPARSE_IGNORE_COL)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -221,10 +243,13 @@ def get_arguments() -> tuple:
                 'schema_sheet_name': args.schema_sheet_name,
                 'schema_header_lines': args.schema_header,
                 'schema_col_names_row': args.schema_col_names_row,
+                'schema_table_name_col': args.schema_table_name_col,
                 'schema_field_name_col': args.schema_field_name_col,
                 'schema_data_type_col': args.schema_data_type_col,
+                'schema_data_len_col': args.schema_data_len_col,
                 'schema_description_col': args.schema_description_col,
                 'use_schema_cols': args.use_schema_cols,
+                'ignore_cols': tuple(one_col.casefold() for one_col in args.ignore_col),
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
@@ -309,10 +334,11 @@ def transform_geom_cols(col_names: tuple, col_values: tuple, geom_col_info: dict
     return return_values
 
 
-def map_col_type(col_type: str, raise_on_error: bool=False) -> str:
+def map_col_type(col_type: str, col_len: int=None, raise_on_error: bool=False) -> str:
     """Maps the column type to a MySQL type
     Arguments:
         col_type: the string representing the column type
+        col_len: Optional length specification for column (may not be honored)
         raise_on_error: When True, raise an IndexError if the column type is unknown
     Returns:
         Returns the mapped string type
@@ -324,8 +350,11 @@ def map_col_type(col_type: str, raise_on_error: bool=False) -> str:
         case 'Number':
             col_ret_type = 'DOUBLE'
 
-        case 'Short Text':
-            col_ret_type = 'VARCHAR(255)'
+        case 'Short Text' | 'Long Text':
+            if not col_len:
+                col_ret_type = 'VARCHAR(512)'
+            else:
+                col_ret_type = f'VARCHAR({col_len})'
 
         case 'Date/Time':
             col_ret_type = 'TIMESTAMP'
@@ -354,7 +383,7 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
         conn: the database connection
     """
     # Define some handy variables
-    lower_col_names = tuple((one_name.lower() for one_name in col_names))
+    lower_col_names = tuple((one_name.casefold() for one_name in col_names))
     verbose = 'verbose' in opts and opts['verbose']
 
     # Check if the table exists
@@ -370,17 +399,21 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
     # If we have point columns specified, check that they are valid
     point_col_names = None
     if opts["point_col_x"]:
-        if not opts["point_col_x"].lower() in lower_col_names:
+        if not opts["point_col_x"].casefold() in lower_col_names:
             raise ValueError(f'The X column name for point is not found "{opts["point_col_x"]}"')
-        if not opts["point_col_y"].lower() in lower_col_names:
+        if not opts["point_col_y"].casefold() in lower_col_names:
             raise ValueError(f'The Y column name for point is not found "{opts["point_col_y"]}"')
-        point_col_names = (opts["point_col_x"].lower(), opts["point_col_y"].lower())
+        point_col_names = (opts["point_col_x"].casefold(), opts["point_col_y"].casefold())
 
     # Load all the indexes into the schema definition sheet
+    col_table_idx = int(opts['schema_table_name_col']) - 1 \
+                        if opts['schema_table_name_col'].isnumeric() else None
     col_name_idx = int(opts['schema_field_name_col']) - 1 \
                         if opts['schema_field_name_col'].isnumeric() else None
     col_type_idx = int(opts['schema_data_type_col']) - 1 \
                         if opts['schema_data_type_col'].isnumeric() else None
+    col_len_idx = int(opts['schema_data_len_col']) - 1 \
+                        if opts['schema_data_len_col'].isnumeric() else None
     col_desc_idx = int(opts['schema_description_col']) - 1 \
                         if opts['schema_description_col'].isnumeric() else None
 
@@ -396,12 +429,16 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
         for one_col in next(rows_iter):
             if one_col.value is None:
                 continue
-            cur_name = one_col.value.lower()
-            if cur_name == opts['schema_field_name_col'].lower():
+            cur_name = one_col.value.casefold()
+            if cur_name == opts['schema_table_name_col'].casefold():
+                col_table_idx = idx
+            elif cur_name == opts['schema_field_name_col'].casefold():
                 col_name_idx = idx
-            elif cur_name == opts['schema_data_type_col'].lower():
+            elif cur_name == opts['schema_data_type_col'].casefold():
                 col_type_idx = idx
-            elif cur_name == opts['schema_description_col'].lower():
+            elif cur_name == opts['schema_data_len_col'].casefold():
+                col_len_idx = idx
+            elif cur_name == opts['schema_description_col'].casefold():
                 col_desc_idx = idx
             idx = idx + 1
 
@@ -415,18 +452,42 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
 
     # Prepare the column information
     col_info = []
+    ignore_columns = opts['ignore_cols'] if 'ignore_cols' in opts else []
     for one_row in rows_iter:
         # Skip if we're only adding columns found in the data sheet and it's not a match
         if 'use_schema_cols' not in opts or not opts['use_schema_cols']:
-            if one_row[col_name_idx].value.lower() not in lower_col_names:
+            if one_row[col_table_idx].value is None:
+                continue
+            if one_row[col_table_idx].value.casefold() != table_name.casefold():
+                continue
+            if one_row[col_name_idx].value is None:
+                print('HACK:   skipping None')
+                continue
+            print('HACK:    Col Names: ', one_row[col_name_idx].value.casefold(), lower_col_names)
+            if one_row[col_name_idx].value.casefold() not in lower_col_names:
+                print('HACK:   skipping not equal')
                 continue
         # Skip over the point column names if we're creating a point column
-        if point_col_names and one_row[col_name_idx].value.lower() in point_col_names:
+        if point_col_names and one_row[col_name_idx].value.casefold() in point_col_names:
+            print('HACK:   skipping point')
+            continue
+        # Make sure this column belongs to the current table
+        col_table = one_row[col_table_idx].value
+        print(f'HACK: table: {col_table} {table_name}', flush=True)
+        if col_table.casefold() != table_name.casefold():
+            print('HACK:    skipping')
+            continue
+        # Check if we ignore a column
+        col_name = one_row[col_name_idx].value
+        print(f'HACK: cols: {col_name} ', ignore_columns, flush=True)
+        if col_name.casefold() in ignore_columns:
+            print('HACK:    skipping')
             continue
         # Add the column information to the list
-        col_name = one_row[col_name_idx].value
-        col_type = map_col_type(one_row[col_type_idx].value, raise_on_error=True)
-        is_primary = col_name.lower() == opts['primary_key'].lower()
+        col_type = map_col_type(one_row[col_type_idx].value,
+                        int(one_row[col_len_idx].value) if one_row[col_len_idx].value else 0,
+                        raise_on_error=True)
+        is_primary = col_name.casefold() == opts['primary_key'].casefold()
         col_info.append({
             'name': col_name,
             'type': 'INT' if is_primary else col_type,
@@ -436,6 +497,11 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
             'null_allowed': not is_primary,
             'index': is_primary                 # Primary keys are indexed
             })
+
+    # Make sure we have something
+    if not col_info:
+        print(f'No column descriptions found for table {table_name}', flush=True)
+        return
 
     # Add in the point column type if we're creating one
     if point_col_names:
@@ -511,7 +577,8 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
         col_values = tuple(one_cell.value for one_cell in one_row)
 
         # Check for existing data and skip this row if it exists and we're not forcing
-        data_exists = conn.check_data_exists(table_name, col_names, col_values, geom_col_info, \
+        data_exists = conn.check_data_exists(table_name, col_names, col_values,
+                                            geom_col_info=geom_col_info,
                                             primary_key=opts['primary_key'],
                                             verbose=opts['verbose'] if 'verbose' in opts else False)
         if data_exists and not opts['force']:
