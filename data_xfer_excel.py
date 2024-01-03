@@ -6,6 +6,7 @@ import os
 import argparse
 import sys
 from getpass import getpass
+from typing import Optional
 import openpyxl
 from openpyxl import load_workbook
 import mysql.connector
@@ -79,6 +80,8 @@ ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the ge
                            f'(default is {DEFAULT_GEOM_EPSG})'
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
+# Help for the reset flag
+ARGPARSE_RESET_HELP = 'Deletes the contents of the tables to the loaded data (destroys old data)'
 
 
 def get_arguments() -> tuple:
@@ -116,6 +119,7 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
+    parser.add_argument('--reset', action='store_true', help=ARGPARSE_RESET_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -140,8 +144,6 @@ def get_arguments() -> tuple:
         print(f'Unable to open EXCEL file {excel_file}', flush=True)
         sys.exit(11)
 
-    print('HACK: ',args.point_cols)
-
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
                 'host': args.host,
@@ -155,7 +157,8 @@ def get_arguments() -> tuple:
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
-                'primary_key': args.key_name
+                'primary_key': args.key_name,
+                'reset': args.reset
                }
 
     # Return the loaded JSON
@@ -235,6 +238,120 @@ def transform_geom_cols(col_names: tuple, col_values: tuple, geom_col_info: dict
     return return_values
 
 
+def db_get_fk_constraints(conn: A2Database, table_name: str, verbose: bool=False) -> Optional[dict]:
+    """Returns the foreign key constraints that point to the specified table, not the table's
+       constraints
+    Arguments:
+        conn: the database connection
+        table_name: table that the constraints point to
+        verbose: prints additional information when True (truthy)
+    Returns:
+        A dictionary of the constraints' definitions, or None if no constraints are
+        found.
+        The dictionary is keyed by the constraint's name and each entry has the following
+        format. The referenced columns (ref_columns) are ordered by their oridinal value.
+        {
+           contraint_name: {
+            'table_name': the table the constraint belongs to
+            'table_schema': the schema of the table
+            'table_column': the constrained column
+            'constraint_schema': the schema the constraint belongs to
+            'ref_table_schema': the schema of the table the constraint references
+            'ref_table_name': the table the constraint references
+            'ref_columns': [
+                column name 1,
+                column name 2,
+                ...
+            ]
+           }
+        }, {...}
+    """
+    constraints = {}
+
+    query = 'SELECT TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME,CONSTRAINT_SCHEMA,CONSTRAINT_NAME,' \
+            'REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME, '\
+            'ORDINAL_POSITION FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE ' \
+            'REFERENCED_TABLE_SCHEMA = (SELECT DATABASE()) AND ' \
+            'REFERENCED_TABLE_NAME=%s ORDER BY TABLE_SCHEMA,TABLE_NAME,' \
+            'ORDINAL_POSITION'
+
+    conn.execute(query, (table_name,))
+
+    for one_row in conn.fetchall():
+        cons_name = one_row[4]
+        if cons_name in constraints:
+            cur_cons = constraints[cons_name]
+        else:
+            if verbose:
+                print(f'Found constraint {cons_name} on table {one_row[1]}', flush=True)
+            cur_cons = {
+                'table_schema': one_row[0],
+                'table_name': one_row[1],
+                'table_column': one_row[2],
+                'constraint_schema': one_row[3],
+                'ref_table_schema': one_row[5],
+                'ref_table_name': one_row[6],
+                'ref_columns':[]
+            }
+
+        # Fill in the column information
+        ord_pos = int(one_row[8])
+        while len(cur_cons['ref_columns']) < ord_pos:
+            cur_cons['ref_columns'].append('')
+        cur_cons['ref_columns'][ord_pos-1] = one_row[7]
+
+        constraints[cons_name] = cur_cons
+
+    conn.reset()
+    if verbose:
+        print(f'Found {len(constraints)} constraints referencing table "{table_name}"',
+              flush=True)
+    return constraints if constraints else None
+
+
+def db_remove_fk_constraints(conn: A2Database, constraints: dict, verbose: bool=False) -> None:
+    """Removes the foreign key constraints from the database
+    Arguments:
+        conn: the database connection
+        constraints: the dictionary of constraints (see db_get_fk_constraints)
+        verbose: prints additional information when True (truthy)
+    """
+    if not constraints:
+        return
+
+    for cons_name in constraints.keys():
+        cons_info = constraints[cons_name]
+        query = f'ALTER TABLE {cons_info["table_name"]} DROP FOREIGN KEY {cons_name}'
+        if verbose:
+            print(query, flush=True)
+        conn.execute(query)
+        conn.reset()
+
+
+def db_restore_fk_constraints(conn: A2Database, constraints: dict, verbose: bool=False) -> None:
+    """Restores foreign key constraints that were removed
+    Arguments:
+        conn: the database connection
+        constraints: the dictionary of constraints (see db_get_fk_constraints)
+        verbose: prints additional information when True (truthy)
+    """
+    if not constraints:
+        return
+
+    for cons_name in constraints.keys():
+        cons_info = constraints[cons_name]
+        ref_columns = list(cons_info['ref_columns'])
+        query = f'ALTER TABLE {cons_info["table_name"]} ADD FOREIGN KEY {cons_name} ' \
+                f'({cons_info["table_column"]}) REFERENCES {cons_info["ref_table_name"]} (' + \
+                ','.join((one_col for one_col in ref_columns)) + ')'
+
+        if verbose:
+            print(query, flush=True)
+
+        conn.execute(query)
+        conn.reset()
+
+
 def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Database, opts: dict) \
                     -> None:
     """Uploads the data in the worksheet
@@ -243,10 +360,17 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         conn: the database connection
         opts: additional options
     """
+    verbose = 'verbose' in opts and opts['verbose']
+    resetting = 'reset' in opts and opts['reset']
+    saved_constraints = None
+
     # Get the table name from the sheet title
     table_name = '_'.join(sheet.title.split('_')[:-1])
 
-    print(f'Updating table {table_name} from tab {sheet.title}', flush=True)
+    if resetting:
+        print(f'Replacing data in table {table_name} with data from tab {sheet.title}', flush=True)
+    else:
+        print(f'Updating table {table_name} from tab {sheet.title}', flush=True)
 
     # Get the rows iterator
     rows_iter = sheet.iter_rows()
@@ -269,6 +393,16 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
     geom_col_info, col_alias = conn.get_col_info(table_name, col_names, opts['geometry_epsg'],
                                             colX1=opts['point_col_x'], rowY1=opts['point_col_y'])
 
+    # Check if we're resetting the tables
+    if 'reset' in opts and opts['reset']:
+        saved_constraints = db_get_fk_constraints(conn, table_name, verbose)
+        db_remove_fk_constraints(conn, saved_constraints, verbose)
+        query = f'TRUNCATE TABLE {table_name}'
+        if verbose:
+            print(query, flush=True)
+        conn.execute(query)
+        conn.reset()
+
     # Process the rows
     skipped_rows = 0
     added_updated_rows = 0
@@ -279,7 +413,7 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         data_exists = conn.check_data_exists(table_name, col_names, col_values,
                                             geom_col_info=geom_col_info,
                                             primary_key=opts['primary_key'],
-                                            verbose=opts['verbose'] if 'verbose' in opts else False)
+                                            verbose=verbose)
         if data_exists and not opts['force']:
             skipped_rows = skipped_rows + 1
             continue
@@ -290,7 +424,11 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
                                              opts['geometry_epsg'], conn.epsg)
         conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
                              update=data_exists, \
-                             primary_key=opts['primary_key'], verbose=opts['verbose'])
+                             primary_key=opts['primary_key'],
+                             verbose=verbose)
+
+    if saved_constraints:
+        db_restore_fk_constraints(conn, saved_constraints, verbose)
 
     if skipped_rows:
         print('    Processed', added_updated_rows + skipped_rows, \

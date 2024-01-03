@@ -625,6 +625,7 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     """
     verbose = 'verbose' in opts and opts['verbose']
     readonly = 'readonly' in opts and opts['readonly']
+    force = 'force' in opts and opts['force']
 
     print(f'Processing table: {table["name"]}', flush=True)
     # Check if the table already exists
@@ -632,7 +633,7 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     if conn.table_exists(table['name']):
         matches = conn.table_cols_match(table['name'], table['columns'], verbose)
         if not matches:
-            if ('force' not in opts or not opts['force']) and not readonly:
+            if not force and not readonly:
                 raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
                                     'please remove it before trying again')
 
@@ -643,11 +644,19 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
                        'flag specified', flush=True)
                 print('          continuing in read only mode...', flush=True)
             conn.drop_table(table['name'], verbose, readonly=readonly)
+        elif force:
+            if readonly:
+                print(f'READONLY: table {table["name"]} matches definition and would be ' \
+                       'recreated with the force flag', flush=True)
+            else:
+                print(f'Forcing the drop of table {table["name"]} despite matching definition',
+                      flush=True)
+            conn.drop_table(table['name'], verbose, readonly=readonly)
         else:
             print(f'Table {table["name"]} already exists and matches definition')
 
     # Create the table
-    if not matches:
+    if not matches or force:
         new_fks, _ = conn.create_table(table['name'], table['columns'], verbose, readonly=readonly)
 
         # Create a view if foreign keys were created as part of the table
@@ -656,7 +665,7 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
             if ('noviews' not in opts or not opts['noviews']):
                 conn.create_view(view_name, table['name'], table['columns'], verbose,
                                  readonly=readonly)
-            elif 'force' in opts and opts['force']:
+            elif force:
                 conn.drop_view(view_name, readonly=readonly)
 
 

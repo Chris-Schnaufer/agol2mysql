@@ -461,27 +461,19 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
             if one_row[col_table_idx].value.casefold() != table_name.casefold():
                 continue
             if one_row[col_name_idx].value is None:
-                print('HACK:   skipping None')
                 continue
-            print('HACK:    Col Names: ', one_row[col_name_idx].value.casefold(), lower_col_names)
             if one_row[col_name_idx].value.casefold() not in lower_col_names:
-                print('HACK:   skipping not equal')
                 continue
         # Skip over the point column names if we're creating a point column
         if point_col_names and one_row[col_name_idx].value.casefold() in point_col_names:
-            print('HACK:   skipping point')
             continue
         # Make sure this column belongs to the current table
         col_table = one_row[col_table_idx].value
-        print(f'HACK: table: {col_table} {table_name}', flush=True)
         if col_table.casefold() != table_name.casefold():
-            print('HACK:    skipping')
             continue
         # Check if we ignore a column
         col_name = one_row[col_name_idx].value
-        print(f'HACK: cols: {col_name} ', ignore_columns, flush=True)
         if col_name.casefold() in ignore_columns:
-            print('HACK:    skipping')
             continue
         # Add the column information to the list
         col_type = map_col_type(one_row[col_type_idx].value,

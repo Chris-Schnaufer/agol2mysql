@@ -2,8 +2,7 @@
 """
 
 import uuid
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 import mysql.connector
 
 def connect(user: str = None, password: str = None, host: str = None, database: str = None):
@@ -310,9 +309,9 @@ class A2Database:
         """Fetches one row"""
         return self._cursor.fetchone()
 
-    def fetchall(self, *args, **kwargs):
+    def fetchall(self):
         """Returns all the rows"""
-        return self._cursor.fetchall(args, kwargs)
+        return self._cursor.fetchall()
 
     def commit(self):
         """Performs a commit to the database"""
