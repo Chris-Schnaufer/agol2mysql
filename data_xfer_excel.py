@@ -75,8 +75,11 @@ ARGPARSE_PRIMARY_KEY_HELP = 'The name of the primary key to use when checking if
 # Help for specifying columns that are to be considered point columns
 ARGPARSE_POINT_COLS_HELP = 'The names of the X and Y columns in the spreadsheet that represent ' \
                            'a point type when creating a schema ("<x name>,<y name>")'
-# Help for specifying the EPSG code that the point coordinates are in
-ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric values ' \
+# Help for specifying the EPSG code that geometry coordinates are in
+ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric objects ' \
+                           f'(default is {DEFAULT_GEOM_EPSG})'
+# Help for specifying the default database connection EPSG code
+ARGPARSE_DATABASE_EPSG_HELP = 'The EPSG code of the database geometry ' \
                            f'(default is {DEFAULT_GEOM_EPSG})'
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
@@ -117,6 +120,8 @@ def get_arguments() -> tuple:
     parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
     parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
+    parser.add_argument('--database_epsg', type=int, default=DEFAULT_GEOM_EPSG,
+                        help=ARGPARSE_DATABASE_EPSG_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     parser.add_argument('--reset', action='store_true', help=ARGPARSE_RESET_HELP)
@@ -157,6 +162,7 @@ def get_arguments() -> tuple:
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
+                'database_epsg': args.database_epsg,
                 'primary_key': args.key_name,
                 'reset': args.reset
                }
@@ -487,7 +493,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         sys.exit(101)
 
     # Set the default database EPSG
-    db_conn.epsg = DEFAULT_GEOM_EPSG
+    db_conn.epsg = opts['database_epsg']
 
     # Open the EXCEL file and process each tab
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)

@@ -436,6 +436,8 @@ class A2Database:
                                      f'"{point_col_y}" not found in specified column names: ', \
                                      col_names)
             # Add other cases here
+            case _:
+                raise NotImplementedError(f'Unsupported geometry type {geom_type} specified')
 
         if return_info is None:
             raise ValueError(f'Unsupported geometry column found "{geom_col}"" of type ' \

@@ -24,6 +24,9 @@ layer = sr[0] # sr[0].type == 'Feature Service'
 json_schema = layer.properties # Same as downloading schema JSON from web
 """
 
+# The default EPSG code of geometries
+DEFAULT_GEOM_EPSG=4326
+
 # The name of our script
 SCRIPT_NAME = os.path.basename(__file__)
 
@@ -56,6 +59,9 @@ ARGPARSE_NOVIEWS_HELP = 'For tables created with foreign keys, do not create an 
 # Help for read only mode - no DB changes
 ARGPARSE_READONLY_HELP = 'Don\'t run the SQL commands that modify the database. ' \
                          'Can be combined with verbose'
+# Help for specifying the EPSG code that geometry coordinates are in
+ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric objects ' \
+                           f'(default is {DEFAULT_GEOM_EPSG})'
 
 
 def _get_name_uuid() -> str:
@@ -95,6 +101,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_NOVIEWS_HELP)
     parser.add_argument('--readonly', action='store_true',
                         help=ARGPARSE_READONLY_HELP)
+    parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
+                        help=ARGPARSE_GEOMETRY_EPSG_HELP)
     args = parser.parse_args()
 
     # Find the JSON file and the password (which is allowed to be eliminated)
@@ -130,7 +138,8 @@ def get_arguments() -> tuple:
                 'user': args.user,
                 'password': args.password,
                 'noviews': args.noviews,
-                'readonly': args.readonly
+                'readonly': args.readonly,
+                'geometry_epsg': args.geometry_epsg
                }
 
     # Return the loaded JSON
@@ -388,7 +397,7 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
     }
 
 
-def get_geometry_columns(esri_geometry_type: str, geom_srid: int = 4326) -> Optional[tuple]:
+def get_geometry_columns(esri_geometry_type: str, geom_srid: int) -> Optional[tuple]:
     """Returns the column(s) representing the ESRI geometry type
     Arguments:
         esri_geometry_type: the string representing the geometry type
@@ -579,7 +588,8 @@ def process_layer_table(esri_schema: dict, relationships: list) -> dict:
     # Check for geometry types
     if 'geometryType' in esri_schema and esri_schema['geometryType']:
         cur_srid = get_srid_from_extent(esri_schema['extent']) \
-                                if ('extent' in esri_schema and esri_schema['extent']) else 4326
+                        if ('extent' in esri_schema and esri_schema['extent']) \
+                        else opts['geometry_epsg']
         geom_columns = get_geometry_columns(esri_schema['geometryType'], cur_srid)
         if geom_columns:
             columns.extend(geom_columns)

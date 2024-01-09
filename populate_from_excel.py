@@ -53,7 +53,7 @@ DEFAULT_SCHEMA_DATA_LEN_COL = 'Size'
 DEFAULT_SCHEMA_DESCRIPTION_COL = 'Description'
 
 # Default EPSG code for points
-DEFAULT_GEOM_EPSG = 4326
+DEFAULT_GEOM_EPSG = 26912
 
 # Argparse-related definitions
 # Declare the progam description
@@ -130,6 +130,9 @@ ARGPARSE_POINT_COLS_HELP = 'The names of the X and Y columns in the spreadsheet 
 # Help for specifying the EPSG code that the point coordinates are in
 ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric values ' \
                            f'(default is {DEFAULT_GEOM_EPSG})'
+# Help for specifying the default database connection EPSG code
+ARGPARSE_DATABASE_EPSG_HELP = 'The EPSG code of the database geometry ' \
+                           f'(default is {DEFAULT_GEOM_EPSG})'
 # Help for supressing the creation of views
 ARGPARSE_NOVIEWS_HELP = 'For tables created with geometry, do not create an associated ' \
                         'view that breaks out the different values. Associated views are ' \
@@ -190,6 +193,8 @@ def get_arguments() -> tuple:
     parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
     parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
+    parser.add_argument('--database_epsg', type=int, default=DEFAULT_GEOM_EPSG,
+                        help=ARGPARSE_DATABASE_EPSG_HELP)
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     parser.add_argument('--noviews', action='store_true',
@@ -255,6 +260,7 @@ def get_arguments() -> tuple:
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
+                'database_epsg': args.database_epsg,
                 'primary_key': args.key_name,
                 'primary_key_text': args.pk_force_text,
                 'noviews': args.noviews
@@ -681,7 +687,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         sys.exit(101)
 
     # Set the default database EPSG
-    db_conn.epsg = DEFAULT_GEOM_EPSG
+    db_conn.epsg = opts['database_epsg']
 
     # Open the EXCEL file
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
