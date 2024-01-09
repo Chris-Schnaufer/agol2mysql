@@ -325,20 +325,28 @@ class A2Database:
             print('Resetting the cursor', flush=True)
         self._cursor.reset()
 
-    def check_data_exists_pk(self, table_name: str, primarykey: str, primarykeyvalue: Any) -> bool:
+    def check_data_exists_pk(self, table_name: str, primarykey: str, primarykeyvalue: Any,
+                             verbose: bool=False) -> bool:
         """Checks if a record exists using a primary key
         Arguments:
             table_name: the table to check
             primarykey: the name of the primarykey column
             primarykeyvalue: the value to look for
+            verbose: override default for printing query information (prints if True)
         Return:
             Returns True if one or more rows contain the primary key value and False if no
             rows are found
         """
+        if verbose is None:
+            verbose = self._verbose
+
         table_name = A2Database._sqlstr(table_name)
 
         clean_key = A2Database._sqlstr(primarykey)
         query = f'SELECT count(1) FROM {table_name} WHERE {clean_key}=%s'
+
+        if verbose is True:
+            print(f'  {query}', flush=True)
 
         self._cursor.execute(query, (primarykeyvalue,))
         res = self._cursor.fetchone()
@@ -653,7 +661,7 @@ class A2Database:
 
         # Join the SQL and close the statement
         query += ','.join(query_cols + query_add)
-        query += ')'
+        query += ') COLLATE = utf8mb4_unicode_ci'
 
         if verbose:
             print(query, flush=True)

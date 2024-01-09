@@ -409,14 +409,31 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
     for one_row in rows_iter:
         col_values = tuple(one_cell.value for one_cell in one_row)
 
+        # Skip over missing primary keys
+        pk_value = col_values[col_names.index(opts['primary_key'])]
+        if pk_value is None:
+            print('Skipping data row with null primary key value: ' \
+                  f'row {added_updated_rows + skipped_rows + 1}',
+                  flush=True)
+            skipped_rows = skipped_rows + 1
+            continue
+
         # Check for existing data and skip this row if it exists and we're not forcing
-        data_exists = conn.check_data_exists(table_name, col_names, col_values,
-                                            geom_col_info=geom_col_info,
-                                            primary_key=opts['primary_key'],
-                                            verbose=verbose)
+        data_exists = conn.check_data_exists_pk(table_name, opts['primary_key'], pk_value,
+                                                verbose=verbose)
         if data_exists and not opts['force']:
             skipped_rows = skipped_rows + 1
             continue
+
+        # Check if there are changes to an existing row
+        if data_exists:
+            data_same = conn.check_data_exists(table_name, col_names, col_values,
+                                geom_col_info=geom_col_info,
+                                verbose=verbose)
+            if data_same:
+                print(f'Skipping unchanged data row with primary key {pk_value}', Flush=True)
+                skipped_rows = skipped_rows + 1
+                continue
 
         added_updated_rows = added_updated_rows + 1
         if geom_col_info and conn.epsg != opts['geometry_epsg']:
@@ -434,7 +451,7 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         print('    Processed', added_updated_rows + skipped_rows, \
                         f'rows with {skipped_rows} not updated', flush=True)
     else:
-        print('    Processed', added_updated_rows + skipped_rows, 'rows', flush=True)
+        print('    Processed', added_updated_rows, 'rows', flush=True)
 
 
 def load_excel_file(filepath: str, opts: dict) -> None:

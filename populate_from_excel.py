@@ -137,9 +137,10 @@ ARGPARSE_NOVIEWS_HELP = 'For tables created with geometry, do not create an asso
 # Help text for verbose flag
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
 # Help text for ignore column parameters
-ARGPARSE_IGNORE_COL = 'A column to ignore when loading the data. You can also specify the ' \
-                      'numerical index of the column (starting at 1). Can use multiple times ' \
-                      'on the command line'
+ARGPARSE_IGNORE_COL_HELP = 'A column to ignore when loading the data. You can also specify the ' \
+                           'numerical index of the column (starting at 1). Can use multiple ' \
+                           'times on the command line'
+ARGPARSE_FORCE_PK_TEXT_HELP = 'Force the primary to be text (instead of the default INT type)'
 
 def get_arguments() -> tuple:
     """ Returns the data from the parsed command line arguments
@@ -193,7 +194,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     parser.add_argument('--noviews', action='store_true',
                         help=ARGPARSE_NOVIEWS_HELP)
-    parser.add_argument('--ignore_col', nargs='*', action='extend', help=ARGPARSE_IGNORE_COL)
+    parser.add_argument('--ignore_col', nargs='*', action='extend', help=ARGPARSE_IGNORE_COL_HELP)
+    parser.add_argument('--pk_force_text', action='store_true', help=ARGPARSE_FORCE_PK_TEXT_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -254,6 +256,7 @@ def get_arguments() -> tuple:
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
                 'primary_key': args.key_name,
+                'primary_key_text': args.pk_force_text,
                 'noviews': args.noviews
                }
 
@@ -480,11 +483,12 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
                         int(one_row[col_len_idx].value) if one_row[col_len_idx].value else 0,
                         raise_on_error=True)
         is_primary = col_name.casefold() == opts['primary_key'].casefold()
+        is_primary_text = 'primary_key_text' in opts and opts['primary_key_text']
         col_info.append({
             'name': col_name,
-            'type': 'INT' if is_primary else col_type,
+            'type': 'INT' if is_primary and not is_primary_text else col_type,
             'is_primary': is_primary,
-            'auto_increment': is_primary,       # Primary keys auto-increment
+            'auto_increment': is_primary and not is_primary_text, # Primary key auto-increment
             'description': one_row[col_desc_idx].value,
             'null_allowed': not is_primary,
             'index': is_primary                 # Primary keys are indexed
@@ -534,6 +538,8 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     """
     # Get the table name from the sheet title
     table_name = data_sheet.title
+    ignore_columns = tuple(one_ignore.casefold() for one_ignore in opts['ignore_cols']) \
+                                                    if 'ignore_cols' in opts else tuple()
 
     print(f'Updating table {table_name} from sheet {data_sheet.title}', flush=True)
 
@@ -547,9 +553,16 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     while cnt < opts['data_col_names_row']:
         _ = next(rows_iter)
         cnt = cnt + 1
-    # Get the names
+
+    # Get the column names
+    ignore_idx = []
+    idx = 0
     for one_col in next(rows_iter):
-        col_names.append(one_col.value)
+        if one_col.value is not None and one_col.value.casefold() not in ignore_columns:
+            col_names.append(one_col.value)
+        else:
+            ignore_idx.append(idx)
+        idx += 1
 
     # Add/Change the schema
     if schema_sheet:
@@ -566,7 +579,15 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     skipped_rows = 0
     added_updated_rows = 0
     for one_row in rows_iter:
-        col_values = tuple(one_cell.value for one_cell in one_row)
+        col_values = tuple(one_cell.value for idx,one_cell in enumerate(one_row) \
+                                                                        if idx not in ignore_idx)
+        pk_value = col_values[col_names.index(opts['primary_key'])]
+        if pk_value is None:
+            print('Skipping row with null primary key value: ' \
+                  f'row {added_updated_rows + skipped_rows + opts["data_col_names_row"] + 1}',
+                  flush=True)
+            skipped_rows = skipped_rows + 1
+            continue
 
         # Check for existing data and skip this row if it exists and we're not forcing
         data_exists = conn.check_data_exists(table_name, col_names, col_values,
@@ -587,9 +608,9 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
 
     if skipped_rows:
         print('    Processed', added_updated_rows + skipped_rows, \
-                        f'rows with {skipped_rows} not updated', flush=True)
+                        f'data rows with {skipped_rows} not updated', flush=True)
     else:
-        print('    Processed', added_updated_rows + skipped_rows, 'rows', flush=True)
+        print('    Processed', added_updated_rows + skipped_rows, 'data rows', flush=True)
 
 
 def confirm_options(opts: dict, workbook: openpyxl.workbook.workbook.Workbook) -> tuple:
