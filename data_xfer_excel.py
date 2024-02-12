@@ -5,6 +5,7 @@
 import os
 import argparse
 import sys
+import logging
 from getpass import getpass
 from typing import Optional
 import openpyxl
@@ -40,6 +41,9 @@ DEFAULT_PRIMARY_KEY_NAME = 'ObjectID'
 
 # Default EPSG code for points
 DEFAULT_GEOM_EPSG = 4326
+
+# Default name for logging output
+DEFAULT_LOG_FILENAME = 'data_xfer_excel.out'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -85,10 +89,15 @@ ARGPARSE_DATABASE_EPSG_HELP = 'The EPSG code of the database geometry ' \
 ARGPARSE_VERBOSE_HELP = 'Display additional information as the script is run'
 # Help for the reset flag
 ARGPARSE_RESET_HELP = 'Deletes the contents of the tables to the loaded data (destroys old data)'
+ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
+                             'destructive overwrite of existing files. Default logging file is ' \
+                             f'named {DEFAULT_LOG_FILENAME}'
 
 
-def get_arguments() -> tuple:
+def get_arguments(logger: logging.Logger) -> tuple:
     """ Returns the data from the parsed command line arguments
+    Arguments:
+        logger: the logging instance to use
     Returns:
         A tuple consisting of a string containing the EXCEL file name to process, and
         a dict of the command line options
@@ -125,6 +134,8 @@ def get_arguments() -> tuple:
     parser.add_argument('-k', '--key_name', default=DEFAULT_PRIMARY_KEY_NAME,
                         help=ARGPARSE_PRIMARY_KEY_HELP)
     parser.add_argument('--reset', action='store_true', help=ARGPARSE_RESET_HELP)
+    parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
+                        help=ARGPARSE_LOG_FILENAME_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -137,7 +148,7 @@ def get_arguments() -> tuple:
         excel_file = args.excel_file[0]
     else:
         # Report the problem
-        print('Too many arguments specified for input file', flush=True)
+        logger.error('Too many arguments specified for input file')
         parser.print_help()
         sys.exit(10)
 
@@ -146,7 +157,7 @@ def get_arguments() -> tuple:
         with open(excel_file, encoding="utf-8"):
             pass
     except FileNotFoundError:
-        print(f'Unable to open EXCEL file {excel_file}', flush=True)
+        logger.error(f'Unable to open EXCEL file {excel_file}')
         sys.exit(11)
 
     cmd_opts = {'force': args.force,
@@ -164,11 +175,38 @@ def get_arguments() -> tuple:
                 'geometry_epsg': args.geometry_epsg,
                 'database_epsg': args.database_epsg,
                 'primary_key': args.key_name,
-                'reset': args.reset
+                'reset': args.reset,
+                'log_filename': args.log_filename
                }
 
     # Return the loaded JSON
     return excel_file, cmd_opts
+
+
+def init_logging(filename: str) -> logging.Logger:
+    """Initializes the logging
+    Arguments:
+        filename: name of the file to save logging to
+    Return:
+        Returns the created logger instance
+    """
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # Create formatter
+    formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+    # Console handler
+    cur_handlerr = logging.StreamHandler()
+    cur_handlerr.setFormatter(formatter)
+    logger.addHandler(cur_handlerr)
+
+    # Output file handler
+    cur_handlerr = logging.FileHandler(filename, mode='w')
+    cur_handlerr.setFormatter(formatter)
+    logger.addHandler(cur_handlerr)
+
+    return logger
 
 
 def transform_points(from_epsg: int, to_epsg: int, values: tuple) -> list:
@@ -244,12 +282,14 @@ def transform_geom_cols(col_names: tuple, col_values: tuple, geom_col_info: dict
     return return_values
 
 
-def db_get_fk_constraints(conn: A2Database, table_name: str, verbose: bool=False) -> Optional[dict]:
+def db_get_fk_constraints(conn: A2Database, table_name: str, logger: logging.Logger,
+                          verbose: bool=False) -> Optional[dict]:
     """Returns the foreign key constraints that point to the specified table, not the table's
        constraints
     Arguments:
         conn: the database connection
         table_name: table that the constraints point to
+        logger: logging instance
         verbose: prints additional information when True (truthy)
     Returns:
         A dictionary of the constraints' definitions, or None if no constraints are
@@ -289,7 +329,7 @@ def db_get_fk_constraints(conn: A2Database, table_name: str, verbose: bool=False
             cur_cons = constraints[cons_name]
         else:
             if verbose:
-                print(f'Found constraint {cons_name} on table {one_row[1]}', flush=True)
+                logger.info(f'Found constraint {cons_name} on table {one_row[1]}')
             cur_cons = {
                 'table_schema': one_row[0],
                 'table_name': one_row[1],
@@ -310,16 +350,17 @@ def db_get_fk_constraints(conn: A2Database, table_name: str, verbose: bool=False
 
     conn.reset()
     if verbose:
-        print(f'Found {len(constraints)} constraints referencing table "{table_name}"',
-              flush=True)
+        logger.info(f'Found {len(constraints)} constraints referencing table "{table_name}"')
     return constraints if constraints else None
 
 
-def db_remove_fk_constraints(conn: A2Database, constraints: dict, verbose: bool=False) -> None:
+def db_remove_fk_constraints(conn: A2Database, constraints: dict, logger: logging.Logger,
+                             verbose: bool=False) -> None:
     """Removes the foreign key constraints from the database
     Arguments:
         conn: the database connection
         constraints: the dictionary of constraints (see db_get_fk_constraints)
+        logger: logging instance
         verbose: prints additional information when True (truthy)
     """
     if not constraints:
@@ -329,16 +370,18 @@ def db_remove_fk_constraints(conn: A2Database, constraints: dict, verbose: bool=
         cons_info = constraints[cons_name]
         query = f'ALTER TABLE {cons_info["table_name"]} DROP FOREIGN KEY {cons_name}'
         if verbose:
-            print(query, flush=True)
+            logger.info(query)
         conn.execute(query)
         conn.reset()
 
 
-def db_restore_fk_constraints(conn: A2Database, constraints: dict, verbose: bool=False) -> None:
+def db_restore_fk_constraints(conn: A2Database, constraints: dict, logger: logging.Logger,
+                              verbose: bool=False) -> None:
     """Restores foreign key constraints that were removed
     Arguments:
         conn: the database connection
         constraints: the dictionary of constraints (see db_get_fk_constraints)
+        logger: logging instance
         verbose: prints additional information when True (truthy)
     """
     if not constraints:
@@ -352,7 +395,7 @@ def db_restore_fk_constraints(conn: A2Database, constraints: dict, verbose: bool
                 ','.join((one_col for one_col in ref_columns)) + ')'
 
         if verbose:
-            print(query, flush=True)
+            logger.info(query)
 
         conn.execute(query)
         conn.reset()
@@ -374,9 +417,10 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
     table_name = '_'.join(sheet.title.split('_')[:-1])
 
     if resetting:
-        print(f'Replacing data in table {table_name} with data from tab {sheet.title}', flush=True)
+        opts['logger'].info(f'Replacing data in table {table_name} with data from ' \
+                            f'tab {sheet.title}')
     else:
-        print(f'Updating table {table_name} from tab {sheet.title}', flush=True)
+        opts['logger'].info(f'Updating table {table_name} from tab {sheet.title}')
 
     # Get the rows iterator
     rows_iter = sheet.iter_rows()
@@ -401,11 +445,11 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
 
     # Check if we're resetting the tables
     if 'reset' in opts and opts['reset']:
-        saved_constraints = db_get_fk_constraints(conn, table_name, verbose)
-        db_remove_fk_constraints(conn, saved_constraints, verbose)
+        saved_constraints = db_get_fk_constraints(conn, table_name, opts['logger'], verbose)
+        db_remove_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
         query = f'TRUNCATE TABLE {table_name}'
         if verbose:
-            print(query, flush=True)
+            opts['logger'].info(query)
         conn.execute(query)
         conn.reset()
 
@@ -418,9 +462,8 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         # Skip over missing primary keys
         pk_value = col_values[col_names.index(opts['primary_key'])]
         if pk_value is None:
-            print('Skipping data row with null primary key value: ' \
-                  f'row {added_updated_rows + skipped_rows + 1}',
-                  flush=True)
+            opts['logger'].info('Skipping data row with null primary key value: ' \
+                  f'row {added_updated_rows + skipped_rows + 1}')
             skipped_rows = skipped_rows + 1
             continue
 
@@ -437,7 +480,7 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
                                 geom_col_info=geom_col_info,
                                 verbose=verbose)
             if data_same:
-                print(f'Skipping unchanged data row with primary key {pk_value}', Flush=True)
+                opts['logger'].info(f'Skipping unchanged data row with primary key {pk_value}')
                 skipped_rows = skipped_rows + 1
                 continue
 
@@ -451,13 +494,13 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
                              verbose=verbose)
 
     if saved_constraints:
-        db_restore_fk_constraints(conn, saved_constraints, verbose)
+        db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
 
     if skipped_rows:
-        print('    Processed', added_updated_rows + skipped_rows, \
-                        f'rows with {skipped_rows} not updated', flush=True)
+        opts['logger'].info('    Processed' + str(added_updated_rows + skipped_rows) + \
+                            f'rows with {skipped_rows} not updated')
     else:
-        print('    Processed', added_updated_rows, 'rows', flush=True)
+        opts['logger'].info(f'    Processed {added_updated_rows} rows')
 
 
 def load_excel_file(filepath: str, opts: dict) -> None:
@@ -472,7 +515,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
     if opts is None:
         raise ValueError('Missing command line parameters')
     if not all(required in opts for required in required_opts):
-        print('Missing required command line database parameters', flush=True)
+        opts['logger'].error('Missing required command line database parameters')
         sys.exit(100)
 
     # Get the user password if they need to specify one
@@ -485,11 +528,12 @@ def load_excel_file(filepath: str, opts: dict) -> None:
             host=opts["host"],
             database=opts["database"],
             password=opts["password"],
-            user=opts["user"]
+            user=opts["user"],
+            logger=opts['logger']
         )
-    except mysql.connector.errors.ProgrammingError as ex:
-        print('Error', ex, flush=True)
-        print('Please correct errors and try again', flush=True)
+    except mysql.connector.errors.ProgrammingError:
+        opts['logger'].error('LoadExcelFile', exc_info=True, stack_info=True)
+        opts['logger'].error('Please correct errors and try again')
         sys.exit(101)
 
     # Set the default database EPSG
@@ -498,7 +542,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
     # Open the EXCEL file and process each tab
     workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
 
-    print(f'Updating using {filepath}')
+    opts['logger'].info(f'Updating using {filepath}')
 
     for one_sheet in workbook.worksheets:
         process_sheet(one_sheet, db_conn, opts)
@@ -507,5 +551,10 @@ def load_excel_file(filepath: str, opts: dict) -> None:
 
 
 if __name__ == '__main__':
-    excel_filename, user_opts = get_arguments()
-    load_excel_file(excel_filename, user_opts)
+    try:
+        excel_filename, user_opts = get_arguments(logging.getLogger())
+        user_opts['logger'] = init_logging(user_opts['log_filename'])
+        load_excel_file(excel_filename, user_opts)
+    except Exception:
+        user_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)
+        sys.exit(250)

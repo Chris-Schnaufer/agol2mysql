@@ -2,18 +2,34 @@
 """
 
 import uuid
+import logging
 from typing import Any, Optional
 import mysql.connector
 
-def connect(user: str = None, password: str = None, host: str = None, database: str = None):
+def connect(user: str=None, password: str=None, host: str=None, database: str=None,
+            logger: logging.Logger=None):
     """
     Arguments:
         user: the name of the database user
         password: the user's password
         host: the database's host
         database: the database to connect to
+        logger: the logging instance to use
     """
-    new_conn = A2Database()
+    if not logger:
+        # Get a logging instance
+        logger = logging.getLogger('a2database')
+        logger.setLevel(logging.INFO)
+
+        # Create formatter
+        formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+        # Console handler
+        cur_handlerr = logging.StreamHandler()
+        cur_handlerr.setFormatter(formatter)
+        logger.addHandler(cur_handlerr)
+
+    new_conn = A2Database(logger)
     new_conn.connect(user, password, host, database)
     return new_conn
 
@@ -23,7 +39,7 @@ class A2Database:
     # Characters to strip out of strings used in SQL statements
     _restricted_chars = ';()"\'%*'
 
-    def __init__(self):
+    def __init__(self, logger: logging.Logger=None):
         """Initialize an instance
         """
         self._conn = None
@@ -31,6 +47,7 @@ class A2Database:
         self._verbose = False
         self._mysql_version = None
         self._epsg = None
+        self._logger = logger
 
     def __del__(self):
         """Handles closing the connection and other cleanup
@@ -113,7 +130,7 @@ class A2Database:
                                     f'user={user}' if user is not None else None,
                                      'password=*****' if password is not None else None
                                ) if param is not None)
-                print('Connecting to the database', print_params, flush=True)
+                self._logger.info(f'Connecting to the database {print_params}')
             self._conn = mysql.connector.connect(
                                     host=host,
                                     database=database,
@@ -252,6 +269,16 @@ class A2Database:
         self._verbose = noisy
 
     @property
+    def logger(self):
+        """Returns the current logging.Logger instance """
+        return self._logger
+
+    @verbose.setter
+    def verbose(self, logger: logging.Logger=None) ->None:
+        """Sets the logging.Logger instance """
+        self._logger = logger
+
+    @property
     def epsg(self):
         """Returns the default epsg for geometries"""
         return self._epsg
@@ -300,9 +327,9 @@ class A2Database:
         """Handles the execution of a SQL statement"""
         if self._verbose:
             if params is not None:
-                print(sql_command, params, flush=True)
+                self._logger.info(f'{sql_command}  {params}')
             else:
-                print(sql_command, flush=True)
+                self._logger.info(sql_command)
         self._cursor.execute(sql_command, params, multi)
 
     def fetchone(self):
@@ -316,13 +343,13 @@ class A2Database:
     def commit(self):
         """Performs a commit to the database"""
         if self._verbose:
-            print('Committing to the database', flush=True)
+            self._logger.info('Committing to the database')
         self._conn.commit()
 
     def reset(self):
         """Resets (clears) the current query"""
         if self._verbose:
-            print('Resetting the cursor', flush=True)
+            self._logger.info('Resetting the cursor')
         self._cursor.reset()
 
     def check_data_exists_pk(self, table_name: str, primarykey: str, primarykeyvalue: Any,
@@ -346,7 +373,7 @@ class A2Database:
         query = f'SELECT count(1) FROM {table_name} WHERE {clean_key}=%s'
 
         if verbose is True:
-            print(f'  {query}', flush=True)
+            self._logger.info(f'  {query}')
 
         self._cursor.execute(query, (primarykeyvalue,))
         res = self._cursor.fetchone()
@@ -423,10 +450,10 @@ class A2Database:
                 if all(expected_col in col_names for expected_col in (point_col_x, point_col_y)):
                     if self.version_major >= 8 and geometry_epsg is not None \
                                                             and geometry_epsg != self._epsg:
-                        col_sql = 'ST_TRANSFORM(ST_GeomFromText(\'POINT(%s %s)\', ' \
+                        col_sql = 'ST_TRANSFORM(ST_Srid(Point(%s, %s), ' \
                                   f'{geometry_epsg}), {self._epsg})'
                     else:
-                        col_sql = f'ST_GeomFromText(\'POINT(%s %s)\', {self._epsg})'
+                        col_sql = f'ST_Srid(Point(%s, %s), {self._epsg})'
                     return_info = {'table_column': geom_col,
                                    'col_sql': col_sql,
                                    'sheet_cols': (point_col_x, point_col_y)
@@ -496,8 +523,8 @@ class A2Database:
                                 is_nullable, auto_increment, column_default in self._cursor:
             if not col_name in col_indexes:
                 if verbose:
-                    print(f'Table "{table_name}" column "{col_name}" is not found in new ' \
-                           'table definition')
+                    self._logger.info(f'Table "{table_name}" column "{col_name}" is not found ' \
+                           'in new table definition')
                 return False
             # Get the matched column information by name
             match_col = col_info[col_indexes[col_name]]
@@ -529,9 +556,9 @@ class A2Database:
             extra_cols = set((A2Database._sqlstr(col_val['name']).casefold() for \
                                 col_val in col_info))
             extra_cols = extra_cols - set(found_cols)
-            print(f'Table {table_name} has fewer defined columns than it\'s definition')
+            self._logger.info(f'Table {table_name} has fewer defined columns than it\'s definition')
             for one_col in extra_cols:
-                print(f'    {one_col}')
+                self._logger.info(f'    {one_col}')
         return len(found_cols) == len(col_info)
 
     def drop_table(self, table_name: str, verbose: bool=None, readonly: bool=False) -> None:
@@ -561,7 +588,7 @@ class A2Database:
             for one_name in names:
                 query = f'ALTER TABLE {parent_table_name} DROP FOREIGN KEY {one_name}'
                 if verbose is True:
-                    print(f'  {query}', flush=True)
+                    self._logger.info(f'  {query}')
                 if not readonly:
                     self._cursor.execute(query)
                     self._cursor.reset()
@@ -569,7 +596,7 @@ class A2Database:
         # Drop the table itself
         query = f'DROP TABLE {table_name}'
         if verbose is True:
-            print(f'  {query}', flush=True)
+            self._logger.info(f'  {query}')
 
         if not readonly:
             self._cursor.execute(query)
@@ -666,7 +693,7 @@ class A2Database:
         query += ') COLLATE = utf8mb4_unicode_ci'
 
         if verbose:
-            print(query, flush=True)
+            self._logger.info(query)
 
         if not readonly:
             self._cursor.execute(query)
@@ -705,7 +732,7 @@ class A2Database:
             query = f'DROP VIEW {self.sqlstr(view_name)}'
 
             if verbose:
-                print(query, flush=True)
+                self._logger.info(query)
 
             if not readonly:
                 self._cursor.execute(query)
@@ -782,7 +809,7 @@ class A2Database:
 
         # Run the query
         if verbose:
-            print(query, flush=True)
+            self._logger.info(query)
 
         if not readonly:
             self._cursor.execute(query)
@@ -860,7 +887,7 @@ class A2Database:
 
         # Run the query and determine if we have a row or not
         if verbose:
-            print(query, query_values, flush=True)
+            self._logger.info(f'{query} {query_values}')
         self._cursor.execute(query, query_values)
 
         res = self._cursor.fetchone()
@@ -947,7 +974,7 @@ class A2Database:
 
         # Run the query
         if verbose:
-            print(query, query_values, flush=True)
+            self._logger.info(f'{query} {query_values}')
 
         if not readonly:
             self._cursor.execute(query, query_values)

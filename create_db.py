@@ -6,6 +6,7 @@ import os
 import argparse
 import json
 import sys
+import logging
 from typing import Optional
 from getpass import getpass
 from collections.abc import Iterable
@@ -32,6 +33,9 @@ SCRIPT_NAME = os.path.basename(__file__)
 
 # Default host name to connect to the database
 DEFAULT_HOST_NAME = 'localhost'
+
+# Default name for logging output
+DEFAULT_LOG_FILENAME = 'create_db.out'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -62,6 +66,10 @@ ARGPARSE_READONLY_HELP = 'Don\'t run the SQL commands that modify the database. 
 # Help for specifying the EPSG code that geometry coordinates are in
 ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the geometric objects ' \
                            f'(default is {DEFAULT_GEOM_EPSG})'
+# Help for changing the logging filename
+ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
+                             'destructive overwrite of existing files. Default logging file is ' \
+                             f'named {DEFAULT_LOG_FILENAME}'
 
 
 def _get_name_uuid() -> str:
@@ -72,8 +80,10 @@ def _get_name_uuid() -> str:
     return str(uuid.uuid4()).replace('-', '')
 
 
-def get_arguments() -> tuple:
+def get_arguments(logger: logging.Logger) -> tuple:
     """ Returns the data from the parsed command line arguments
+    Arguments:
+        logger: the logging instance to use
     Returns:
         A tuple consisting of a dict containing the loaded JSON to process, and
         a dict of the command line options
@@ -103,6 +113,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_READONLY_HELP)
     parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
+    parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
+                        help=ARGPARSE_LOG_FILENAME_HELP)
     args = parser.parse_args()
 
     # Find the JSON file and the password (which is allowed to be eliminated)
@@ -115,7 +127,7 @@ def get_arguments() -> tuple:
         json_file = args.json_file[0]
     else:
         # Report the problem
-        print('Too many arguments specified for input file', flush=True)
+        logger.error('Too many arguments specified for input file')
         parser.print_help()
         sys.exit(10)
 
@@ -125,10 +137,10 @@ def get_arguments() -> tuple:
         with open(json_file, encoding="utf-8") as infile:
             schema = json.load(infile)
     except FileNotFoundError:
-        print(f'Unable to open JSON file {json_file}', flush=True)
+        logger.error(f'Unable to open JSON file {json_file}')
         sys.exit(11)
     except json.JSONDecodeError:
-        print(f'File is not valid JSON {json_file}', flush=True)
+        logger.error(f'File is not valid JSON {json_file}')
         sys.exit(12)
 
     cmd_opts = {'force': args.force,
@@ -139,11 +151,38 @@ def get_arguments() -> tuple:
                 'password': args.password,
                 'noviews': args.noviews,
                 'readonly': args.readonly,
-                'geometry_epsg': args.geometry_epsg
+                'geometry_epsg': args.geometry_epsg,
+                'log_filename': args.log_filename
                }
 
     # Return the loaded JSON
     return schema, cmd_opts
+
+
+def init_logging(filename: str) -> logging.Logger:
+    """Initializes the logging
+    Arguments:
+        filename: name of the file to save logging to
+    Return:
+        Returns the created logger instance
+    """
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # Create formatter
+    formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+    # Console handler
+    cur_handlerr = logging.StreamHandler()
+    cur_handlerr.setFormatter(formatter)
+    logger.addHandler(cur_handlerr)
+
+    # Output file handler
+    cur_handlerr = logging.FileHandler(filename, mode='w')
+    cur_handlerr.setFormatter(formatter)
+    logger.addHandler(cur_handlerr)
+
+    return logger
 
 
 def validate_json(schema_json: dict) -> bool:
@@ -485,12 +524,14 @@ def get_geometry_columns(esri_geometry_type: str, geom_srid: int) -> Optional[tu
             ,)
 
 
-def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple) -> tuple:
+def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple,
+                            logger: logging.Logger) -> tuple:
     """Processes ESRI index definitions into a standard format
     Arguments:
         table_name: the name of the table the index definitions belong to
         indexes: the list of defined indexes
         columns: the columns associated with the table - filters out invalid indexes
+        logger: logging instance
     Returns:
         A list of indexes to create
     """
@@ -504,9 +545,9 @@ def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple) ->
 
         # An invalid index will have column names that don't exist
         if not index_fields.issubset(table_columns):
-            print(f'Invalid index found (contains invalid columns) \"{one_index["name"]}\"', \
-                                                                                    flush=True)
-            print( '   Skipping invalid index with fields', index_fields, flush=True)
+            logger.warning('Invalid index found (contains invalid columns) ' \
+                           f'\"{one_index["name"]}\"')
+            logger.warning(f'   Skipping invalid index with fields {index_fields}')
             continue
 
         return_idxs.append({
@@ -535,11 +576,12 @@ def get_srid_from_extent(extent: dict) -> Optional[int]:
     return found_srid
 
 
-def process_layer_table(esri_schema: dict, relationships: list) -> dict:
+def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> dict:
     """Processes the layer or table information into a standard format
     Arguments:
         esri_schema: the dict describing one layer or table
         relationships: a list of origin relationships
+        opts: contains other command line options and the logger
     Exceptions:
         A TypeError exception is raised if required fields are missing
         An IndexError exception is raised if there's an problem with the JSON definition
@@ -595,8 +637,8 @@ def process_layer_table(esri_schema: dict, relationships: list) -> dict:
             columns.extend(geom_columns)
 
     # Add in any new indexes
-    new_indexes = layer_table_get_indexes(table_name, esri_schema['indexes'], columns) \
-                                                            if 'indexes' in esri_schema else []
+    new_indexes = layer_table_get_indexes(table_name, esri_schema['indexes'], columns, \
+                                            opts['logger']) if 'indexes' in esri_schema else []
     if len(new_indexes) > 0:
         indexes.extend(new_indexes)
 
@@ -629,7 +671,7 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     Arguments:
         conn: the database connector
         table: the internal information used to creagte/update a table
-        opts: contains other command line options
+        opts: contains other command line options and the logger
     Exceptions:
         Raises a RuntimeError if the table already exists
     """
@@ -637,7 +679,7 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     readonly = 'readonly' in opts and opts['readonly']
     force = 'force' in opts and opts['force']
 
-    print(f'Processing table: {table["name"]}', flush=True)
+    opts['logger'].info(f'Processing table: {table["name"]}')
     # Check if the table already exists
     matches = False
     if conn.table_exists(table['name']):
@@ -648,22 +690,22 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
                                     'please remove it before trying again')
 
             if not readonly:
-                print(f'Forcing the drop of table {table["name"]}', flush=True)
+                opts['logger'].info(f'Forcing the drop of table {table["name"]}')
             else:
-                print(f'READONLY: table {table["name"]} exists and would need the force ' \
-                       'flag specified', flush=True)
-                print('          continuing in read only mode...', flush=True)
+                opts['logger'].info(f'READONLY: table {table["name"]} exists and would need ' \
+                       'the force flag specified')
+                opts['logger'].info('          continuing in read only mode...')
             conn.drop_table(table['name'], verbose, readonly=readonly)
         elif force:
             if readonly:
-                print(f'READONLY: table {table["name"]} matches definition and would be ' \
-                       'recreated with the force flag', flush=True)
+                opts['logger'].info(f'READONLY: table {table["name"]} matches definition and ' \
+                       'would be recreated with the force flag')
             else:
-                print(f'Forcing the drop of table {table["name"]} despite matching definition',
-                      flush=True)
+                opts['logger'].info(f'Forcing the drop of table {table["name"]} despite matching ' \
+                                 'definition')
             conn.drop_table(table['name'], verbose, readonly=readonly)
         else:
-            print(f'Table {table["name"]} already exists and matches definition')
+            opts['logger'].info(f'Table {table["name"]} already exists and matches definition')
 
     # Create the table
     if not matches or force:
@@ -721,14 +763,15 @@ def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
     Arguments:
         conn: the database connector
         indexes: the indexes to process
-        opts: contains other command line options
+        opts: contains other command line options and the logger
     """
     readonly = 'readonly' in opts and opts['readonly']
 
     # Process the indexes one at a time
     for one_index in indexes:
         index_column_names = set(one_index['column_names'])
-        print(f'Processing index for table: {one_index["table"]}', index_column_names, flush=True)
+        opts['logger'].info(f'Processing index for table: {one_index["table"]} ' \
+                         f'{index_column_names}')
 
         matching_index = find_matching_index(conn, one_index['table'], index_column_names)
         if matching_index:
@@ -736,18 +779,18 @@ def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
                         and not readonly:
                 continue
             # Remove the index
-            print('READONLY: ' if readonly else '',
-                    f'Forcing removal of matching index \'{matching_index}\'', flush=True)
+            opts['logger'].info(('READONLY: ' if readonly else '') + \
+                    f'Forcing removal of matching index \'{matching_index}\'')
             query = f'DROP INDEX {matching_index} ON {one_index["table"]}'
             if not readonly:
                 try:
                     conn.execute(query)
                     conn.reset()
                 except mysql.connector.errors.DatabaseError as ex:
-                    print('Warning: Unable to remove matching index:', ex, flush=True)
-                    print('    Skipping re-creation of index')
+                    opts['logger'].warning('Unable to remove matching index %s', str(ex))
+                    opts['logger'].warning('    Skipping re-creation of index')
                     if 'verbose' in opts and opts['verbose']:
-                        print(f'   {query}')
+                        opts['logger'].info(f'   {query}')
                     continue
 
         # Prepare to create the query string
@@ -770,8 +813,8 @@ def db_process_indexes(conn: A2Database, indexes: tuple, opts: dict) -> None:
             query_fields.append(one_index['description'])
 
         if 'verbose' in opts and opts['verbose']:
-            print(f'db_process_indexes: {idx_name}', flush=True)
-            print(f'    {query} ({query_fields})', flush=True)
+            opts['logger'].info(f'db_process_indexes: {idx_name}')
+            opts['logger'].info(f'    {query} ({query_fields})')
         if not readonly:
             conn.execute(query, query_fields)
             conn.reset()
@@ -783,13 +826,13 @@ def db_process_values(conn: A2Database, values: tuple, tables: tuple, opts: dict
         conn: the database connector
         values: list of prepared values to insert into the database
         tables: list of tables in the database - used to find primary key
-        opts: contains other command line options
+        opts: contains other command line options and the logger
     """
     verbose = 'verbose' in opts and opts['verbose']
     readonly = 'readonly' in opts and opts['readonly']
 
     # Process each set of data for each table
-    print('Processing values for tables', flush=True)
+    opts['logger'].info('Processing values for tables')
     processed = {}
     for one_update in values:
         table_name = one_update['table']
@@ -799,7 +842,7 @@ def db_process_values(conn: A2Database, values: tuple, tables: tuple, opts: dict
         # Find the primary key name for the table
         primary_key = find_table_pk(table_name, tables)
         if primary_key is None:
-            print('WARNING: {table_name} does not have a primary key, inserting all rows')
+            opts['logger'].warning('{table_name} does not have a primary key, inserting all rows')
 
         # Process each row for the table
         for one_value in one_update['values']:
@@ -815,7 +858,7 @@ def db_process_values(conn: A2Database, values: tuple, tables: tuple, opts: dict
 
             # Skip matching data
             if data_match:
-                print('    Skipping row with exact match')
+                opts['logger'].info('    Skipping row with exact match')
                 continue
 
             # If we have a primary key, determine if this is an update or an insert
@@ -841,7 +884,7 @@ def db_process_values(conn: A2Database, values: tuple, tables: tuple, opts: dict
         conn.commit()
 
     for key, val in processed.items():
-        print(f'   {key}: {val} rows processed', flush=True)
+        opts['logger'].info(f'   {key}: {val} rows processed')
 
 
 def update_database(conn: A2Database, schema: list, opts: dict) -> None:
@@ -849,16 +892,16 @@ def update_database(conn: A2Database, schema: list, opts: dict) -> None:
     Arguments:
         conn: the database connection
         schema: a list of database objects to create or update
-        opts: contains other command line options
+        opts: contains other command line options and the logger
     """
     for one_schema in schema:
         # Process all the tables first
         try:
             for one_table in one_schema['tables']:
                 db_process_table(conn, one_table, opts)
-        except RuntimeError as ex:
-            print('Error', ex, flush=True)
-            print('Specify the -f flag to force the removal of existing tables', flush=True)
+        except RuntimeError:
+            opts['logger'].error('', exc_info=True, stack_info=True)
+            opts['logger'].error('Specify the -f flag to force the removal of existing tables')
             sys.exit(200)
 
         # Process indexes
@@ -873,7 +916,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         found - if not, it creates them; if they exist they are updated as needed
     Arguments:
         schema_data: the loaded database schema
-        opts: contains other command line options
+        opts: contains other command line options and the logger
     """
     index = None
     layers = None
@@ -885,7 +928,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
     if opts is None:
         raise ValueError('Missing command line parameters')
     if not all(required in opts for required in required_opts):
-        print('Missing required command line database parameters', flush=True)
+        opts['logger'].error('Missing required command line database parameters')
         sys.exit(100)
 
     # Get the user password if they need to specify one
@@ -898,11 +941,12 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
             host=opts["host"],
             database=opts["database"],
             password=opts["password"],
-            user=opts["user"]
+            user=opts["user"],
+            logger=opts["logger"]
         )
-    except mysql.connector.errors.ProgrammingError as ex:
-        print('Error', ex, flush=True)
-        print('Please correct errors and try again', flush=True)
+    except mysql.connector.errors.ProgrammingError:
+        opts['logger'].error('', exc_info=True, stack_info=True)
+        opts['logger'].error('Please correct errors and try again')
         sys.exit(101)
 
     try:
@@ -911,7 +955,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         if 'layers' in schema_data:
             layers = [None] * len(schema_data['layers'])
             for one_layer in schema_data['layers']:
-                layers[index] = process_layer_table(one_layer, relationships)
+                layers[index] = process_layer_table(one_layer, relationships, opts)
                 index = index + 1
 
         # Process any tables
@@ -919,22 +963,27 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         if 'tables' in schema_data:
             tables = [None] * len(schema_data['tables'])
             for one_table in schema_data['tables']:
-                tables[index] = process_layer_table(one_table, relationships)
+                tables[index] = process_layer_table(one_table, relationships, opts)
                 index = index + 1
 
-    except TypeError as ex:
-        msg = str(ex)
-        print(msg, flush=True)
-        print(f'    Exception caught at index {index + 1}', flush=True)
+    except TypeError:
+        opts['logger'].error('', exc_info=True)
+        opts['logger'].error(f'    Exception caught at index {index + 1}')
         raise
 
     # Processes the discovered database objects
     update_database(db_conn, layers + tables, opts)
 
-    print('Completed processing JSON file' + (' in READONLY mode' if opts['readonly'] else ''))
+    opts['logger'].info('Completed processing JSON file' + \
+                    (' in READONLY mode' if opts['readonly'] else ''))
 
 
 if __name__ == "__main__":
-    json_data, other_opts = get_arguments()
-    if validate_json(json_data):
-        create_update_database(json_data, other_opts)
+    try:
+        json_data, other_opts = get_arguments(logging.getLogger())
+        other_opts['logger'] = init_logging(other_opts['log_filename'])
+        if validate_json(json_data):
+            create_update_database(json_data, other_opts)
+    except Exception:
+        other_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)
+        sys.exit(250)
