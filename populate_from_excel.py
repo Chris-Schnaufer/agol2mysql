@@ -5,6 +5,7 @@
 import os
 import argparse
 import sys
+import logging
 from getpass import getpass
 import openpyxl
 from openpyxl import load_workbook
@@ -54,6 +55,9 @@ DEFAULT_SCHEMA_DESCRIPTION_COL = 'Description'
 
 # Default EPSG code for points
 DEFAULT_GEOM_EPSG = 26912
+
+# Default name for logging output
+DEFAULT_LOG_FILENAME = 'populate_from_excel.out'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -144,8 +148,12 @@ ARGPARSE_IGNORE_COL_HELP = 'A column to ignore when loading the data. You can al
                            'numerical index of the column (starting at 1). Can use multiple ' \
                            'times on the command line'
 ARGPARSE_FORCE_PK_TEXT_HELP = 'Force the primary to be text (instead of the default INT type)'
+# Help for changing the logging filename
+ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
+                             'destructive overwrite of existing files. Default logging file is ' \
+                             f'named {DEFAULT_LOG_FILENAME}'
 
-def get_arguments() -> tuple:
+def get_arguments(logger: logging.Logger) -> tuple:
     """ Returns the data from the parsed command line arguments
     Returns:
         A tuple consisting of a string containing the EXCEL file name to process, and
@@ -201,6 +209,8 @@ def get_arguments() -> tuple:
                         help=ARGPARSE_NOVIEWS_HELP)
     parser.add_argument('--ignore_col', nargs='*', action='extend', help=ARGPARSE_IGNORE_COL_HELP)
     parser.add_argument('--pk_force_text', action='store_true', help=ARGPARSE_FORCE_PK_TEXT_HELP)
+    parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
+                        help=ARGPARSE_LOG_FILENAME_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -213,7 +223,7 @@ def get_arguments() -> tuple:
         excel_file = args.excel_file[0]
     else:
         # Report the problem
-        print('Too many arguments specified for input file', flush=True)
+        logger.error('Too many arguments specified for input file')
         parser.print_help()
         sys.exit(10)
 
@@ -222,19 +232,19 @@ def get_arguments() -> tuple:
         with open(excel_file, encoding="utf-8"):
             pass
     except FileNotFoundError:
-        print(f'Unable to open EXCEL file {excel_file}', flush=True)
+        logger.error(f'Unable to open EXCEL file {excel_file}')
         sys.exit(11)
 
     # Check point column names parameter
     if args.point_cols:
         # Point columns come in pairs
         if not ',' in args.point_cols:
-            print('Point column names must be separated by a comma (,)', flush=True)
+            logger.error('Point column names must be separated by a comma (,)')
             sys.exit(12)
         # Checking for non-blank names
         for one_name in (one_col.strip() for one_col in args.point_cols.split(',')):
             if not one_name:
-                print('Please specify an X and Y column name for point support', flush=True)
+                logger.error('Please specify an X and Y column name for point support')
                 sys.exit(13)
 
     cmd_opts = {'force': args.force,
@@ -263,11 +273,38 @@ def get_arguments() -> tuple:
                 'database_epsg': args.database_epsg,
                 'primary_key': args.key_name,
                 'primary_key_text': args.pk_force_text,
-                'noviews': args.noviews
+                'noviews': args.noviews,
+                'log_filename': args.log_filename
                }
 
     # Return the loaded JSON
     return excel_file, cmd_opts
+
+
+def init_logging(filename: str) -> logging.Logger:
+    """Initializes the logging
+    Arguments:
+        filename: name of the file to save logging to
+    Return:
+        Returns the created logger instance
+    """
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # Create formatter
+    formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+    # Console handler
+    cur_handler = logging.StreamHandler()
+    cur_handler.setFormatter(formatter)
+    logger.addHandler(cur_handler)
+
+    # Output file handler
+    cur_handler = logging.FileHandler(filename, mode='w')
+    cur_handler.setFormatter(formatter)
+    logger.addHandler(cur_handler)
+
+    return logger
 
 
 def transform_points(from_epsg: int, to_epsg: int, values: tuple) -> list:
@@ -400,9 +437,9 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
     if table_exists:
         if 'force' not in opts or not opts['force']:
             if verbose:
-                print(f'Table {table_name} already exists and the force flag is not specified',
-                                                                                    flush=True)
-                print('    not updating table')
+                opts['logger'].warning(f'Table {table_name} already exists and the ' \
+                                       'force flag is not specified')
+                opts['logger'].warning('    not updating table')
             return
 
     # If we have point columns specified, check that they are valid
@@ -502,7 +539,7 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
 
     # Make sure we have something
     if not col_info:
-        print(f'No column descriptions found for table {table_name}', flush=True)
+        opts['logger'].warning(f'No column descriptions found for table {table_name}')
         return
 
     # Add in the point column type if we're creating one
@@ -547,7 +584,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     ignore_columns = tuple(one_ignore.casefold() for one_ignore in opts['ignore_cols']) \
                                                     if 'ignore_cols' in opts else tuple()
 
-    print(f'Updating table {table_name} from sheet {data_sheet.title}', flush=True)
+    opts['logger'].info(f'Updating table {table_name} from sheet {data_sheet.title}')
 
     # Get the rows iterator
     rows_iter = data_sheet.iter_rows()
@@ -573,7 +610,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     # Add/Change the schema
     if schema_sheet:
         db_update_schema(table_name, schema_sheet, col_names, opts, conn)
-        print(f'    Updated the schema for {table_name}', flush=True)
+        opts['logger'].info(f'    Updated the schema for {table_name}')
         if opts["schema_only"]:
             return
 
@@ -589,9 +626,8 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
                                                                         if idx not in ignore_idx)
         pk_value = col_values[col_names.index(opts['primary_key'])]
         if pk_value is None:
-            print('Skipping row with null primary key value: ' \
-                  f'row {added_updated_rows + skipped_rows + opts["data_col_names_row"] + 1}',
-                  flush=True)
+            opts['logger'].info('Skipping row with null primary key value: ' \
+                  f'row {added_updated_rows + skipped_rows + opts["data_col_names_row"] + 1}')
             skipped_rows = skipped_rows + 1
             continue
 
@@ -613,10 +649,10 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
                              primary_key=opts['primary_key'], verbose=opts['verbose'])
 
     if skipped_rows:
-        print('    Processed', added_updated_rows + skipped_rows, \
-                        f'data rows with {skipped_rows} not updated', flush=True)
+        opts['logger'].info(f'    Processed {added_updated_rows + skipped_rows}' \
+                            f'data rows with {skipped_rows} not updated')
     else:
-        print('    Processed', added_updated_rows + skipped_rows, 'data rows', flush=True)
+        opts['logger'].info(f'    Processed {added_updated_rows + skipped_rows} data rows')
 
 
 def confirm_options(opts: dict, workbook: openpyxl.workbook.workbook.Workbook) -> tuple:
@@ -634,18 +670,18 @@ def confirm_options(opts: dict, workbook: openpyxl.workbook.workbook.Workbook) -
 
     # Confirm the sheets exist
     if not 'data_sheet_name' in opts:
-        print('You need to specify the data sheet name', flush=True)
+        opts['logger'].error('You need to specify the data sheet name')
         return None, None
     if not opts['data_sheet_name'] or opts['data_sheet_name'] not in workbook.sheetnames:
-        print(f'Unable to find sheet {opts["data_sheet_name"]} in excel file', flush=True)
+        opts['logger'].error(f'Unable to find sheet {opts["data_sheet_name"]} in excel file')
         return None, None
     if 'schema_sheet_name' in opts and opts['schema_sheet_name']:
         if opts['schema_sheet_name'] not in workbook.sheetnames:
-            print(f'Unable to find schema sheet {opts["schema_sheet_name"]} in excel file',
-                                                                                flush=True)
+            opts['logger'].error(f'Unable to find schema sheet {opts["schema_sheet_name"]} ' \
+                                  'in excel file')
             return None, None
     if schema_only and not opts['schema_sheet_name']:
-        print('Schema only is set but no schema sheet name is specified')
+        opts['logger'].warning('Schema only is set but no schema sheet name is specified')
 
     # We don't check column information here
 
@@ -666,7 +702,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
     if opts is None:
         raise ValueError('Missing command line parameters')
     if not all(required in opts for required in required_opts):
-        print('Missing required command line database parameters', flush=True)
+        opts['logger'].error('Missing required command line database parameters')
         sys.exit(100)
 
     # Get the user password if they need to specify one
@@ -679,11 +715,12 @@ def load_excel_file(filepath: str, opts: dict) -> None:
             host=opts["host"],
             database=opts["database"],
             password=opts["password"],
-            user=opts["user"]
+            user=opts["user"],
+            logger=opts['logger']
         )
-    except mysql.connector.errors.ProgrammingError as ex:
-        print('Error', ex, flush=True)
-        print('Please correct errors and try again', flush=True)
+    except mysql.connector.errors.ProgrammingError:
+        opts['logger'].error('', exc_info=True)
+        opts['logger'].error('Please correct errors and try again')
         sys.exit(101)
 
     # Set the default database EPSG
@@ -697,7 +734,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
     if not data_sheet:
         sys.exit(102)
 
-    print(f'Updating using {filepath}')
+    opts['logger'].info(f'Updating using {filepath}')
 
     process_sheets(data_sheet, schema_sheet, opts, db_conn)
 
@@ -705,5 +742,10 @@ def load_excel_file(filepath: str, opts: dict) -> None:
 
 
 if __name__ == '__main__':
-    excel_filename, user_opts = get_arguments()
-    load_excel_file(excel_filename, user_opts)
+    try:
+        excel_filename, user_opts = get_arguments(logging.getLogger())
+        user_opts['logger'] = init_logging(user_opts['log_filename'])
+        load_excel_file(excel_filename, user_opts)
+    except Exception:
+        user_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)
+        sys.exit(250)

@@ -173,14 +173,14 @@ def init_logging(filename: str) -> logging.Logger:
     formatter = logging.Formatter('%(levelname)s: %(message)s')
 
     # Console handler
-    cur_handlerr = logging.StreamHandler()
-    cur_handlerr.setFormatter(formatter)
-    logger.addHandler(cur_handlerr)
+    cur_handler = logging.StreamHandler()
+    cur_handler.setFormatter(formatter)
+    logger.addHandler(cur_handler)
 
     # Output file handler
-    cur_handlerr = logging.FileHandler(filename, mode='w')
-    cur_handlerr.setFormatter(formatter)
-    logger.addHandler(cur_handlerr)
+    cur_handler = logging.FileHandler(filename, mode='w')
+    cur_handler.setFormatter(formatter)
+    logger.addHandler(cur_handler)
 
     return logger
 
