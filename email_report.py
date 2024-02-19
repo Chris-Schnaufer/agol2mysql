@@ -6,10 +6,12 @@ import os
 import argparse
 import pathlib
 import time
-import mimetypes
 import smtplib
+from getpass import getpass
 from enum import Enum
-from email.message import EmailMessage
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 class ReportLevel(Enum):
     """Class used fo argparse options"""
@@ -33,10 +35,16 @@ DEFAULT_REPORT_LEVEL = ReportLevel.WARNING
 DEFAULT_REPORT_LEVEL_LINES = 5
 
 # Default email from field
-DEFAULT_EMAIL_FROM = 'donotreply@nowhere.com'
+DEFAULT_EMAIL_FROM = 'schnaufer@arizona.edu'
 
 # Default email server
-DEFAULT_EMAIL_SERVER = 'smtp.gmail.com'
+DEFAULT_EMAIL_SERVER = 'ob1.hc4604-54.iphmx.com'
+
+# The environment variable name from which to get user name
+EMAIL_USER_ENV_NAME = 'REPORT_EMAIL_USER'
+
+# The environment variable name from which to get password
+EMAIL_PASSWORD_ENV_NAME = 'REPORT_EMAIL_PW'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -57,7 +65,7 @@ ARGPARSE_TITLE_HELP = 'The title to use in the report. Overrides the default tit
 ARGPARSE_SUBJECT_HELP= 'The subject line of the sent email. Overrides the default subject'
 # Additional email addresses to send report to
 ARGPARSE_EXTRA_EMAIL_HELP = 'A list of one or more additional email addresses separated by '\
-                            'semicolons'
+                            'colons'
 # The primary email address to send report to
 ARGPARSE_MAIN_EMAIL_HELP = 'The email address to send the report to'
 # Email address used to say who email is from
@@ -66,6 +74,12 @@ ARGPARSE_FROM_HELP = 'Change the from email field from {DEFAULT_EMAIL_FROM}'
 ARGPARSE_REPORT_DEBUG_HELP = 'Include debug logging in the report'
 # The server to send email through
 ARGPARSE_EMAIL_SERVER_HELP = f'SMTP server to send email fom. Default is {DEFAULT_EMAIL_SERVER}'
+# The email server user name
+ARGPARSE_EMAIL_USER = 'The email server username. If not specified, it is fetched from ' \
+            f'the {EMAIL_USER_ENV_NAME} environment variable'
+# The email password help
+ARGPARSE_EMAIL_PASSWORD = 'Prompt for the email password. When not specified, the password ' \
+            f'is fetched from the {EMAIL_PASSWORD_ENV_NAME} environment variable'
 
 
 def get_arguments() -> dict:
@@ -84,7 +98,10 @@ def get_arguments() -> dict:
     parser.add_argument('--level_lines', type=int, default=DEFAULT_REPORT_LEVEL_LINES,
                         help=ARGPARSE_LEVEL_LINES_HELP)
     parser.add_argument('--title', help=ARGPARSE_TITLE_HELP)
-    parser.add_argument('--email_server', help=ARGPARSE_EMAIL_SERVER_HELP)
+    parser.add_argument('--email_server', default=DEFAULT_EMAIL_SERVER,
+                        help=ARGPARSE_EMAIL_SERVER_HELP)
+    parser.add_argument('--user', help=ARGPARSE_EMAIL_USER)
+    parser.add_argument('--password', '-p', action='store_true', help=ARGPARSE_EMAIL_PASSWORD)
     parser.add_argument('--subject', help=ARGPARSE_SUBJECT_HELP)
     parser.add_argument('--email_from', default=DEFAULT_EMAIL_FROM, help=ARGPARSE_FROM_HELP)
     parser.add_argument('--report_debug', action='store_true', help=ARGPARSE_REPORT_DEBUG_HELP)
@@ -96,12 +113,28 @@ def get_arguments() -> dict:
                 'level_lines': args.level_lines,
                 'title': args.title,
                 'server': args.email_server,
+                'user': args.user,
+                'password': args.password,
                 'email': args.email,
                 'extra_emails': args.extra_emails,
                 'subject': args.subject,
                 'from': args.email_from,
                 'report_debug': args.report_debug
                }
+
+    if not cmd_opts['user']:
+        cmd_opts['user'] = os.environ.get(EMAIL_USER_ENV_NAME)
+        if cmd_opts['user'] is None or not cmd_opts['user']:
+            raise ValueError('Unable to retrieve user name from environment variable ' \
+                             f'{EMAIL_USER_ENV_NAME}')
+
+    if cmd_opts['password'] is True:
+        cmd_opts['password'] = getpass()
+    else:
+        cmd_opts['password'] = os.environ.get(EMAIL_PASSWORD_ENV_NAME)
+        if cmd_opts['password'] is None or not cmd_opts['password']:
+            raise ValueError(f'Unable to retrieve password from environment variable ' \
+                             f'{EMAIL_PASSWORD_ENV_NAME}')
 
     return cmd_opts
 
@@ -170,20 +203,21 @@ def send_email(data: dict, opts: dict) -> None:
     """
     # Get variable fields
     cur_title = opts['title'] if opts['title'] is not None else \
-                    os.path.splitext(os.path.basename(opts['log_file']))
+                    os.path.splitext(os.path.basename(opts['log_file']))[0]
     subject = opts['subject'] if opts['subject'] is not None else \
                     f'Automated reporting: {os.path.basename(opts["log_file"])}'
 
-    msg = EmailMessage()
+
+    msg = MIMEMultipart()
     msg['From'] = opts['from']
     msg['To'] = opts['email']
     if opts['extra_emails']:
-        msg['Cc'] = opts['extra_emails'].split(';').join(',')
+        msg['Cc'] = ','.join(opts['extra_emails'].split(':'))
     msg['Date'] = data['report_date']
     msg['Subject'] = subject
 
     report = [f'Title: {cur_title}',
-              f'Report date: {report_data["report_date"]}'
+              f'Report date: {report_data["report_date"]}',
               f'Log date: {data["log_date"]}',
               f'Log file: {opts["log_file"]}',
               f'Total lines: {data["total_lines"]}'
@@ -221,28 +255,29 @@ def send_email(data: dict, opts: dict) -> None:
             report.append('>   ... (more in log file)')
         report.append(' ')
 
-    msg.set_content('\n'.join(report))
+    msg.attach(MIMEText('\n'.join(report)))
 
     # Attach log file
-    ctype, encoding = mimetypes.guess_type(opts['log_file'])
-    if ctype is None or encoding is not None:
-        ctype = 'application/octet-stream'
-    maintype, subtype = ctype.split('/', 1)
     with open(opts['log_file'], 'rb') as in_file:
-        msg.add_attachment(in_file.read(),
-                           maintype=maintype,
-                           subtype=subtype,
-                           filename=os.path.basename(opts['log_file'])
-        )
+        part = MIMEApplication(in_file.read(),
+                                Name=os.path.basename(opts['log_file'])
+                              )
+    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(opts["log_file"])}"'
+    msg.attach(part)
 
     # Send the email
     if opts['extra_emails']:
-        email_addrs = list(opts['extra_emails'].split(','))
+        email_addrs = list(opts['extra_emails'].split(':'))
         email_addrs.append(opts['email'])
     else:
         email_addrs = [opts['email']]
     with smtplib.SMTP(opts['server']) as smtp:
-        smtp.send_message(msg)
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(opts['user'],opts['password'])
+        smtp.sendmail(opts['email'], ','.join(email_addrs), msg.as_string())
+        smtp.quit()
 
 if __name__ == '__main__':
     user_opts = get_arguments()
