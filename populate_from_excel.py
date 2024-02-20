@@ -544,14 +544,17 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
 
     # Add in the point column type if we're creating one
     if point_col_names:
-        col_info.append({
+        new_col_info = {
             'name': 'geom',
             'type': 'POINT',
             'is_spatial': True,
             'description': 'Auto-generated column',
             'null_allowed': False,
             'index': True
-            })
+            }
+        if conn.version_major >= 8 and opts['database_epsg'] is not None:
+            new_col_info['srid'] = opts['database_epsg']
+        col_info.append(new_col_info)
 
     # If the table exists, we need to drop it
     if table_exists:
