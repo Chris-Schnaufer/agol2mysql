@@ -497,8 +497,8 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
 
     if skipped_rows:
-        opts['logger'].info('    Processed' + str(added_updated_rows + skipped_rows) + \
-                            f'rows with {skipped_rows} not updated')
+        opts['logger'].info('    Processed ' + str(added_updated_rows + skipped_rows) + \
+                            f' rows with {skipped_rows} not updated')
     else:
         opts['logger'].info(f'    Processed {added_updated_rows} rows')
 

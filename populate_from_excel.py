@@ -148,6 +148,8 @@ ARGPARSE_IGNORE_COL_HELP = 'A column to ignore when loading the data. You can al
                            'numerical index of the column (starting at 1). Can use multiple ' \
                            'times on the command line'
 ARGPARSE_FORCE_PK_TEXT_HELP = 'Force the primary to be text (instead of the default INT type)'
+# Help for indicating there's no primary key
+ARGPARSE_NO_PRIMARY_HELP = 'No primary key is available'
 # Help for changing the logging filename
 ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
                              'destructive overwrite of existing files. Default logging file is ' \
@@ -209,6 +211,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
                         help=ARGPARSE_NOVIEWS_HELP)
     parser.add_argument('--ignore_col', nargs='*', action='extend', help=ARGPARSE_IGNORE_COL_HELP)
     parser.add_argument('--pk_force_text', action='store_true', help=ARGPARSE_FORCE_PK_TEXT_HELP)
+    parser.add_argument('--no_primary', action='store_true', help=ARGPARSE_NO_PRIMARY_HELP)
     parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
                         help=ARGPARSE_LOG_FILENAME_HELP)
     args = parser.parse_args()
@@ -266,13 +269,15 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'schema_data_len_col': args.schema_data_len_col,
                 'schema_description_col': args.schema_description_col,
                 'use_schema_cols': args.use_schema_cols,
-                'ignore_cols': tuple(one_col.casefold() for one_col in args.ignore_col),
+                'ignore_cols': tuple(one_col.casefold() for one_col in args.ignore_col) \
+                                    if args.ignore_col else None,
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
                 'database_epsg': args.database_epsg,
                 'primary_key': args.key_name,
                 'primary_key_text': args.pk_force_text,
+                'no_primary': args.no_primary,
                 'noviews': args.noviews,
                 'log_filename': args.log_filename
                }
@@ -393,16 +398,19 @@ def map_col_type(col_type: str, col_len: int=None, raise_on_error: bool=False) -
     """
     col_ret_type = None
     match col_type:
-        case 'Number':
+        case 'Number' | 'Double' | 'Single':
             col_ret_type = 'DOUBLE'
 
+        case 'Integer':
+            col_ret_type = 'INT'
+
         case 'Short Text' | 'Long Text':
-            if not col_len:
-                col_ret_type = 'VARCHAR(512)'
+            if not col_len or not isinstance(col_len, int):
+                col_ret_type = 'VARCHAR(1024)'
             else:
                 col_ret_type = f'VARCHAR({col_len})'
 
-        case 'Date/Time':
+        case 'Date/Time' | 'Date With Time':
             col_ret_type = 'TIMESTAMP'
 
         case 'Yes/No':
@@ -498,7 +506,7 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
 
     # Prepare the column information
     col_info = []
-    ignore_columns = opts['ignore_cols'] if 'ignore_cols' in opts else []
+    ignore_columns = opts['ignore_cols'] if 'ignore_cols' in opts and opts['ignore_cols'] else []
     for one_row in rows_iter:
         # Skip if we're only adding columns found in the data sheet and it's not a match
         if 'use_schema_cols' not in opts or not opts['use_schema_cols']:
@@ -508,17 +516,17 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
                 continue
             if one_row[col_name_idx].value is None:
                 continue
-            if one_row[col_name_idx].value.casefold() not in lower_col_names:
+            if one_row[col_name_idx].value.casefold().replace(' ', '_') not in lower_col_names:
                 continue
         # Skip over the point column names if we're creating a point column
-        if point_col_names and one_row[col_name_idx].value.casefold() in point_col_names:
+        if point_col_names and one_row[col_name_idx].value.casefold().replace(' ', '_') in point_col_names:
             continue
         # Make sure this column belongs to the current table
         col_table = one_row[col_table_idx].value
         if col_table.casefold() != table_name.casefold():
             continue
         # Check if we ignore a column
-        col_name = one_row[col_name_idx].value
+        col_name = one_row[col_name_idx].value.replace(' ', '_')
         if col_name.casefold() in ignore_columns:
             continue
         # Add the column information to the list
@@ -528,7 +536,7 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
         is_primary = col_name.casefold() == opts['primary_key'].casefold()
         is_primary_text = 'primary_key_text' in opts and opts['primary_key_text']
         col_info.append({
-            'name': col_name,
+            'name': col_name.replace(' ', '_'),
             'type': 'INT' if is_primary and not is_primary_text else col_type,
             'is_primary': is_primary,
             'auto_increment': is_primary and not is_primary_text, # Primary key auto-increment
@@ -585,7 +593,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     # Get the table name from the sheet title
     table_name = data_sheet.title
     ignore_columns = tuple(one_ignore.casefold() for one_ignore in opts['ignore_cols']) \
-                                                    if 'ignore_cols' in opts else tuple()
+                            if 'ignore_cols' in opts and opts['ignore_cols'] else tuple()
 
     opts['logger'].info(f'Updating table {table_name} from sheet {data_sheet.title}')
 
@@ -605,7 +613,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     idx = 0
     for one_col in next(rows_iter):
         if one_col.value is not None and one_col.value.casefold() not in ignore_columns:
-            col_names.append(one_col.value)
+            col_names.append(one_col.value.replace(' ', '_'))
         else:
             ignore_idx.append(idx)
         idx += 1
@@ -624,20 +632,27 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
     # Process the rows
     skipped_rows = 0
     added_updated_rows = 0
+    primary_key_idx = col_names.index(opts['primary_key']) if ('no_primary' in opts and \
+                                not opts['no_primary']) or 'no_primary' not in opts else None
+    primary_key_name = opts['primary_key'] if ('no_primary' in opts and \
+                                not opts['no_primary']) or 'no_primary' not in opts else None
+    print(f'HACK: primary key: {primary_key_name} {type(primary_key_name)}')
     for one_row in rows_iter:
         col_values = tuple(one_cell.value for idx,one_cell in enumerate(one_row) \
                                                                         if idx not in ignore_idx)
-        pk_value = col_values[col_names.index(opts['primary_key'])]
-        if pk_value is None:
-            opts['logger'].info('Skipping row with null primary key value: ' \
-                  f'row {added_updated_rows + skipped_rows + opts["data_col_names_row"] + 1}')
-            skipped_rows = skipped_rows + 1
-            continue
+        # Check for primary key when specified
+        if primary_key_idx is not None:
+            pk_value = col_values[primary_key_idx]
+            if pk_value is None:
+                opts['logger'].info('Skipping row with null primary key value: ' \
+                      f'row {added_updated_rows + skipped_rows + opts["data_col_names_row"] + 1}')
+                skipped_rows = skipped_rows + 1
+                continue
 
         # Check for existing data and skip this row if it exists and we're not forcing
         data_exists = conn.check_data_exists(table_name, col_names, col_values,
                                             geom_col_info=geom_col_info,
-                                            primary_key=opts['primary_key'],
+                                            primary_key=primary_key_name,
                                             verbose=opts['verbose'] if 'verbose' in opts else False)
         if data_exists and not opts['force']:
             skipped_rows = skipped_rows + 1
@@ -649,7 +664,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
                                              opts['geometry_epsg'], conn.epsg)
         conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
                              update=data_exists, \
-                             primary_key=opts['primary_key'], verbose=opts['verbose'])
+                             primary_key=primary_key_name, verbose=opts['verbose'])
 
     if skipped_rows:
         opts['logger'].info(f'    Processed {added_updated_rows + skipped_rows}' \

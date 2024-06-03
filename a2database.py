@@ -536,7 +536,7 @@ class A2Database:
             if 'null_allowed' in match_col and bool(is_nullable) != bool(match_col['null_allowed']):
                 return False
 
-            if 'primary' in match_col and (col_key == 'PRI') != bool(match_col['primary']):
+            if 'is_primary' in match_col and (col_key == 'PRI') != bool(match_col['is_primary']):
                 return False
 
             if 'auto_increment' in match_col and bool(auto_increment) != \
@@ -616,7 +616,7 @@ class A2Database:
                 'type': str: the database type of the column
                 'null_allowed': bool: column allows NULL values
                 'srid': int: the SRID of a geometry column
-                'primary': bool: the column is a primary key
+                'is_primary': bool: the column is a primary key
                 'auto_increment': bool: the column auto-increments
                 'default': ?: optional default value for the column (type matches column type)
                 'comment': str: optional comment string
@@ -658,7 +658,8 @@ class A2Database:
                 if self.version_major >= 8:
                     col_sql += f' SRID {one_col["srid"]}'
 
-            if 'primary' in one_col and one_col['primary']:
+            if 'is_primary' in one_col and one_col['is_primary']:
+                print('HACK:   adding primary', flush=True)
                 col_sql += ' PRIMARY KEY'
                 idx_created['PRIMARY'] = (col_name,)
 
