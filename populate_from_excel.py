@@ -401,12 +401,12 @@ def map_col_type(col_type: str, col_len: int=None, raise_on_error: bool=False) -
         case 'Number' | 'Double' | 'Single':
             col_ret_type = 'DOUBLE'
 
-        case 'Integer':
+        case 'Integer' | 'Long Integer':
             col_ret_type = 'INT'
 
         case 'Short Text' | 'Long Text':
             if not col_len or not isinstance(col_len, int):
-                col_ret_type = 'VARCHAR(1024)'
+                col_ret_type = 'VARCHAR(2048)'
             else:
                 col_ret_type = f'VARCHAR({col_len})'
 
@@ -636,7 +636,7 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
                                 not opts['no_primary']) or 'no_primary' not in opts else None
     primary_key_name = opts['primary_key'] if ('no_primary' in opts and \
                                 not opts['no_primary']) or 'no_primary' not in opts else None
-    print(f'HACK: primary key: {primary_key_name} {type(primary_key_name)}')
+    print(f'HACK: primary key: {primary_key_name}')
     for one_row in rows_iter:
         col_values = tuple(one_cell.value for idx,one_cell in enumerate(one_row) \
                                                                         if idx not in ignore_idx)

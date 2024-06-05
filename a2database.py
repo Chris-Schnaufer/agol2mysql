@@ -683,7 +683,7 @@ class A2Database:
                     query_add.append(f'SPATIAL INDEX({col_name})')
                     idx_created[col_name] = (col_name,)
                 else:
-                    idx_name = f'{table_name}_' + self._get_name_uuid() + '_idx'
+                    idx_name = f'{table_name[:25]}_' + self._get_name_uuid() + '_idx'
                     query_add.append(f'INDEX {idx_name} ({col_name})')
                     idx_created[idx_name] = (col_name,)
 
