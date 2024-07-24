@@ -49,7 +49,7 @@ ARGPARSE_DATABASE_HELP = 'The database to connect to'
 # User name help
 ARGPARSE_USER_HELP = 'The username to connect to the database with'
 # Password help
-ARGPARSE_PASSWORD_HELP = 'The password used to connect to the database (leave empty to be prompted)'
+ARGPARSE_PASSWORD_HELP = 'Prompt for the password used to connect to the database'
 # Declare the help text for the JSON filename parameter (for argparse)
 ARGPARSE_JSON_FILE_HELP = 'Path to the JSON file containing the ESRI exported Layer JSON'
 # Declare the help text for the force deletion flag
@@ -281,7 +281,8 @@ def get_enum(domain: dict) -> list:
         'type': 'VARCHAR(256)',
         'null_allowed': False,
         'primary': True,
-        'auto_increment': False
+        'auto_increment': False,
+        'index': True
         }, {
         'name': 'name',
         'type': 'VARCHAR(256)',
@@ -600,6 +601,7 @@ def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> d
     values = []
     unique_field_id = 'objectid'
     table_name = A2Database.sqlstr(esri_schema['name'])
+    opts['logger'].info(f'HACK:   {table_name}')
 
     if 'uniqueIdField' in esri_schema:
         if isinstance(esri_schema['uniqueIdField'], dict) and \
@@ -953,6 +955,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         # Process any layers
         index = 0
         if 'layers' in schema_data:
+            opts['logger'].info('HACK: LAYERS')
             layers = [None] * len(schema_data['layers'])
             for one_layer in schema_data['layers']:
                 layers[index] = process_layer_table(one_layer, relationships, opts)
@@ -961,6 +964,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         # Process any tables
         index = 0
         if 'tables' in schema_data:
+            opts['logger'].info('HACK: TABLES')
             tables = [None] * len(schema_data['tables'])
             for one_table in schema_data['tables']:
                 tables[index] = process_layer_table(one_table, relationships, opts)

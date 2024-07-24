@@ -76,7 +76,7 @@ ARGPARSE_DATABASE_HELP = 'The database to connect to'
 # User name help
 ARGPARSE_USER_HELP = 'The username to connect to the database with'
 # Password help
-ARGPARSE_PASSWORD_HELP = 'The password used to connect to the database (leave empty to be prompted)'
+ARGPARSE_PASSWORD_HELP = 'Prompt for the password used to connect to the database'
 # Declare the help text for the EXCEL filename parameter (for argparse)
 ARGPARSE_EXCEL_FILE_HELP = 'Path to the EXCEL file to upload'
 # Declare the help text for the force deletion flag
@@ -412,6 +412,9 @@ def map_col_type(col_type: str, col_len: int=None, raise_on_error: bool=False) -
 
         case 'Date/Time' | 'Date With Time':
             col_ret_type = 'TIMESTAMP'
+
+        case 'Time':
+            col_ret_type = 'TIME'
 
         case 'Yes/No':
             col_ret_type = 'TINYINT'

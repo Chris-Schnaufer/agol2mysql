@@ -58,7 +58,7 @@ ARGPARSE_DATABASE_HELP = 'The database to connect to'
 # User name help
 ARGPARSE_USER_HELP = 'The username to connect to the database with'
 # Password help
-ARGPARSE_PASSWORD_HELP = 'The password used to connect to the database (leave empty to be prompted)'
+ARGPARSE_PASSWORD_HELP = 'Prompt for the password used to connect to the database'
 # Declare the help text for the EXCEL filename parameter (for argparse)
 ARGPARSE_EXCEL_FILE_HELP = 'Path to the EXCEL file to upload'
 # Declare the help text for the force deletion flag
@@ -72,6 +72,10 @@ ARGPARSE_COL_NAMES_ROW_HELP = 'Specify the row that contains the column names ' 
 # Help text for specifying all the column names for the excel file
 ARGPARSE_COL_NAMES_HELP = 'Comma seperated list of column names (used when column names are not ' \
                           'specified in the file)'
+ARRGPARSE_COL_NAME_MAP_HELP = 'Maps case-sensitive column name in an excel file to a different ' \
+                            'name. Use when the DB column name is different than the spreadsheet ' \
+                            'name. Format as <sheet name>:<col name>=<DB col name>. ' \
+                            'Eg: Mysheet:col 1=other_col'
 # Help text fo specifying the primary key to use
 ARGPARSE_PRIMARY_KEY_HELP = 'The name of the primary key to use when checking if data is ' \
                             f'already in the database (default "{DEFAULT_PRIMARY_KEY_NAME}"). ' \
@@ -126,6 +130,8 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser.add_argument('--col_names_row', type=int, default=DEFAULT_COL_NAMES_ROW,
                         help=ARGPARSE_COL_NAMES_ROW_HELP)
     parser.add_argument('--col_names', help=ARGPARSE_COL_NAMES_HELP)
+    parser.add_argument('--col_name_map', nargs='*', action='extend',
+                        help=ARRGPARSE_COL_NAME_MAP_HELP)
     parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
     parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
@@ -170,6 +176,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'col_names_row': args.col_names_row,
                 'col_names': tuple(one_name.strip() for one_name in args.col_names.split(',')) \
                                         if args.col_names else None,
+                'col_name_map': tuple(args.col_name_map) if args.col_name_map else tuple(),
                 'point_col_x': args.point_cols.split(',')[0] if args.point_cols else None,
                 'point_col_y': args.point_cols.split(',')[1] if args.point_cols else None,
                 'geometry_epsg': args.geometry_epsg,
@@ -178,6 +185,18 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'reset': args.reset,
                 'log_filename': args.log_filename
                }
+
+    # Postprocess column name mapping if there are any
+    if cmd_opts['col_name_map']:
+        new_maps = []
+        for one_map in cmd_opts['col_name_map']:
+            if not ':' in one_map or not '=' in one_map:
+                logger.errror('Improperly formed column name mapping')
+                sys.exit(12)
+            sheet, cols = one_map.split(':', 1)
+            old_col, db_col = cols.split('=', 1)
+            new_maps.append({'sheet_name':sheet, 'sheet_col': old_col, 'db_col': db_col})
+        cmd_opts['col_name_map'] = tuple(new_maps)
 
     # Return the loaded JSON
     return excel_file, cmd_opts
@@ -401,6 +420,27 @@ def db_restore_fk_constraints(conn: A2Database, constraints: dict, logger: loggi
         conn.reset()
 
 
+def map_col_name(sheet_ids: tuple, col_name: str, col_maps: tuple) -> str:
+    """Maps the column name if a sheet and column mapping is found. Returns
+       either the mapped column name or the original column name
+    Arguments:
+        sheet_ids: tuple of sheet IDs to match on
+        col_name: column name to match
+        col_maps: a tuple of column mapping dicts 
+                {'sheet_name': <name>,
+                 'sheet_col': <name>,
+                 'db_col': <name>
+                }
+    Return:
+        Returns either the mapped column name or the original column name
+    """
+    for one_map in col_maps:
+        if one_map['sheet_name'] in sheet_ids and one_map['sheet_col'] == col_name:
+            return one_map['db_col']
+
+    return col_name
+
+
 def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Database, opts: dict) \
                     -> None:
     """Uploads the data in the worksheet
@@ -437,7 +477,10 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         while cnt < opts['col_names_row']:
             _ = next(rows_iter)
         for one_col in next(rows_iter):
-            col_names.append(one_col.value)
+            # Check if we're mapping this name
+            col_names.append(map_col_name((sheet.title, table_name), one_col.value,
+                                          opts['col_name_map']))
+    opts['logger'].info(f'HACK: COL NAMES: {col_names}')
 
     # Find geometry columns
     geom_col_info, col_alias = conn.get_col_info(table_name, col_names, opts['geometry_epsg'],
@@ -556,5 +599,8 @@ if __name__ == '__main__':
         user_opts['logger'] = init_logging(user_opts['log_filename'])
         load_excel_file(excel_filename, user_opts)
     except Exception:
-        user_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)
+        if user_opts and 'logger' in user_opts and user_opts['logger']:
+            user_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)
+        else:
+            logging.getLogger().error('Unhandled exception caught', exc_info=True, stack_info=True)
         sys.exit(250)

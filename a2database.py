@@ -3,6 +3,7 @@
 
 import uuid
 import logging
+import sys
 from typing import Any, Optional
 import mysql.connector
 
@@ -37,7 +38,7 @@ class A2Database:
     """Class handling connections to the database
     """
     # Characters to strip out of strings used in SQL statements
-    _restricted_chars = ';()"\'%*'
+    _restricted_chars = ';()"\'%*#.'
 
     def __init__(self, logger: logging.Logger=None):
         """Initialize an instance
@@ -196,10 +197,10 @@ class A2Database:
         return_sql = None
         match geom_type.lower():
             case 'point':
-                return_sql = f'{table_name}.{col_name} as {col_name}, ' \
-                             f'st_x({table_name}.{col_name}) as {col_name}_x, ' \
-                             f'st_y({table_name}.{col_name}) as {col_name}_y, ' \
-                             f'st_srid({table_name}.{col_name}) as {col_name}_srid'
+                return_sql = f'{table_name}.`{col_name}` as `{col_name}`, ' \
+                             f'st_x({table_name}.`{col_name}`) as `{col_name}_x`, ' \
+                             f'st_y({table_name}.`{col_name}`) as `{col_name}_y`, ' \
+                             f'st_srid({table_name}.`{col_name}`) as `{col_name}_srid`'
 
         return return_sql
 
@@ -274,7 +275,7 @@ class A2Database:
         return self._logger
 
     @verbose.setter
-    def verbose(self, logger: logging.Logger=None) ->None:
+    def logger(self, logger: logging.Logger=None) ->None:
         """Sets the logging.Logger instance """
         self._logger = logger
 
@@ -525,26 +526,32 @@ class A2Database:
                 if verbose:
                     self._logger.info(f'Table "{table_name}" column "{col_name}" is not found ' \
                            'in new table definition')
+                self._cursor.reset()
                 return False
             # Get the matched column information by name
             match_col = col_info[col_indexes[col_name]]
 
             if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
                                             match_col['type']):
+                self._cursor.reset()
                 return False
 
             if 'null_allowed' in match_col and bool(is_nullable) != bool(match_col['null_allowed']):
+                self._cursor.reset()
                 return False
 
             if 'is_primary' in match_col and (col_key == 'PRI') != bool(match_col['is_primary']):
+                self._cursor.reset()
                 return False
 
             if 'auto_increment' in match_col and bool(auto_increment) != \
                                                             bool(match_col['auto_increment']):
+                self._cursor.reset()
                 return False
 
             if 'default' in match_col and match_col['default'] is not None and \
                             column_default.casefold() != match_col['default'].casefold():
+                self._cursor.reset()
                 return False
 
             found_cols.append(col_name.casefold())
@@ -602,6 +609,9 @@ class A2Database:
             self._cursor.execute(query)
             self._cursor.reset()
 
+            self._cursor.close()
+            self._cursor = self._conn.cursor()
+
     def create_table(self, table_name: str, col_info: tuple, verbose: bool=None,
                      readonly: bool=False) -> tuple:
         """Creates a table based upon the information passed in
@@ -649,7 +659,7 @@ class A2Database:
 
             # Be sure to prefix a space before appending strings to the SQL
             # The order of processing the parameters is important (eg: NOT NULL)
-            col_sql = f'{col_name} {one_col["type"]}'
+            col_sql = f'`{col_name}` {one_col["type"]}'
             if 'null_allowed' in one_col and isinstance(one_col['null_allowed'], bool):
                 if not one_col['null_allowed']:
                     col_sql += ' NOT NULL'
@@ -661,7 +671,7 @@ class A2Database:
             if 'is_primary' in one_col and one_col['is_primary']:
                 print('HACK:   adding primary', flush=True)
                 col_sql += ' PRIMARY KEY'
-                idx_created['PRIMARY'] = (col_name,)
+                idx_created['PRIMARY'] = (f'`{col_name}`',)
 
             if 'auto_increment' in one_col and one_col['auto_increment']:
                 col_sql += ' AUTO_INCREMENT'
@@ -674,17 +684,17 @@ class A2Database:
 
             if 'foreign_key' in one_col and one_col['foreign_key']:
                 fk_info = one_col['foreign_key']
-                query_add.append(f'FOREIGN KEY ({col_name}) REFERENCES ' \
+                query_add.append(f'FOREIGN KEY (`{col_name}`) REFERENCES ' \
                                             f'{fk_info["reference"]}({fk_info["reference_col"]})')
                 fks_created[col_name] = (fk_info['reference'], fk_info['reference_col'])
 
             if 'index' in one_col and one_col['index']:
                 if 'is_spatial' in one_col and one_col['is_spatial']:
-                    query_add.append(f'SPATIAL INDEX({col_name})')
+                    query_add.append(f'SPATIAL INDEX(`{col_name}`)')
                     idx_created[col_name] = (col_name,)
                 else:
                     idx_name = f'{table_name[:25]}_' + self._get_name_uuid() + '_idx'
-                    query_add.append(f'INDEX {idx_name} ({col_name})')
+                    query_add.append(f'INDEX {idx_name} (`{col_name}`)')
                     idx_created[idx_name] = (col_name,)
 
             query_cols.append(col_sql)
@@ -778,26 +788,26 @@ class A2Database:
 
             if 'foreign_key' not in one_col or not one_col['foreign_key']:
                 if 'is_spatial' not in one_col or not one_col['is_spatial']:
-                    query += f'{col_separator} {clean_table_name}.{col_name} AS {col_name}'
+                    query += f'{col_separator} {clean_table_name}.`{col_name}` AS `{col_name}`'
                 else:
                     return_sql = A2Database._get_view_spatial_query_cols(one_col['type'],
                                                                 clean_table_name, col_name)
                     if return_sql is None:
                         raise ValueError(f'Unsupported geometry column type found ' \
                                          f'"{one_col["type"]}" in column ' \
-                                         f'"{clean_table_name}.{col_name}" while creating ' \
+                                         f'"{clean_table_name}.`{col_name}`" while creating ' \
                                          f'view "{view_name}"')
                     query += col_separator + return_sql
             else:
                 fk_info = one_col['foreign_key']
                 if 'display_col' in fk_info and fk_info['display_col']:
                     query += col_separator + \
-                                f'{fk_info["reference"]}.{fk_info["display_col"]} AS {col_name}'
+                                f'{fk_info["reference"]}.{fk_info["display_col"]} AS `{col_name}`'
                 else:
                     query += col_separator + \
-                                f'{fk_info["reference"]}.{fk_info["reference_col"]} AS {col_name}'
+                                f'{fk_info["reference"]}.{fk_info["reference_col"]} AS `{col_name}`'
                 join_sql = f'LEFT JOIN {fk_info["reference"]} ON ' + \
-                                f'{clean_table_name}.{col_name} = ' + \
+                                f'{clean_table_name}.`{col_name}` = ' + \
                                 f'{fk_info["reference"]}.{fk_info["reference_col"]}'
                 joins.append(join_sql)
 
@@ -874,14 +884,14 @@ class A2Database:
 
         # Start building the query
         query = f'SELECT count(1) FROM {table_name} WHERE ' + \
-                    ' AND '.join((f'{A2Database._sqlstr(one_name)}=%s' for one_name in check_cols))
+                ' AND '.join((f'`{A2Database._sqlstr(one_name)}`=%s' for one_name in check_cols))
 
         # Build up the values to pass
         query_values = list(col_values[col_names.index(one_name)] for one_name in check_cols)
 
         # Build up the geometry portion of the query
         if geom_col_info and not primary_key:
-            query += f' AND {A2Database._sqlstr(geom_col_info["table_column"])}=' \
+            query += f' AND `{A2Database._sqlstr(geom_col_info["table_column"])}`=' \
                      f'{geom_col_info["col_sql"]}'
             query_values.extend((col_values[col_names.index(one_name)] for one_name in \
                                                                     geom_col_info['sheet_cols']))
@@ -957,10 +967,10 @@ class A2Database:
         # Generate the SQL
         if update:
             query = f'UPDATE {table_name} SET '
-            query += ', '.join((f'{A2Database._sqlstr(query_cols[idx])}={query_types[idx]}' \
+            query += ', '.join((f'`{A2Database._sqlstr(query_cols[idx])}`={query_types[idx]}' \
                                         for idx in range(0, len(query_cols)) \
                                             if query_cols[idx].lower() != primary_key.lower()))
-            query += f' WHERE {primary_key} = %s'
+            query += f' WHERE `{primary_key}` = %s'
 
             # Remove the primary key from the regular list of values
             primary_key_index = next((idx for idx in range(0, len(query_cols)) \
@@ -969,9 +979,9 @@ class A2Database:
             query_values = list(query_values)+list((col_values[col_names.index(primary_key)],))
         else:
             query = f'INSERT INTO {table_name} (' + \
-                            ','.join((A2Database._sqlstr(one_col) for one_col in query_cols)) + \
-                            ') VALUES (' + \
-                            ','.join(query_types) + ')'
+                        ','.join((f'`{A2Database._sqlstr(one_col)}`' for one_col in query_cols)) + \
+                        ') VALUES (' + \
+                        ','.join(query_types) + ')'
 
         # Run the query
         if verbose:
