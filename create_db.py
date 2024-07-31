@@ -12,18 +12,11 @@ from getpass import getpass
 from collections.abc import Iterable
 import uuid
 import mysql.connector
+from arcgis.gis import GIS
 
 import a2database
 from a2database import A2Database
 
-"""
-survey_item_id = '8ad7e11f82fa44c0a52db4ba435b864e' # test (Feature Server) (Form in My Content)
-gis = GIS(survey123_api_url, survey123_username, survey123_password)
-print(gis)
-sr = gis.content.search('owner:schnaufer_uagis')
-layer = sr[0] # sr[0].type == 'Feature Service'
-json_schema = layer.properties # Same as downloading schema JSON from web
-"""
 
 # The default EPSG code of geometries
 DEFAULT_GEOM_EPSG=4326
@@ -36,6 +29,13 @@ DEFAULT_HOST_NAME = 'localhost'
 
 # Default name for logging output
 DEFAULT_LOG_FILENAME = 'create_db.out'
+
+# AGOL URL
+DEFAULT_ESRI_URL = 'https://uagis.maps.arcgis.com'
+# The client ID used to connect to AGOL
+DEFAULT_SURVEY123_CLIENT_ID ='7X8jzC2i59RTyBVp'
+# The feature item ID
+DEFAULT_FEATURE_ITEM_ID = '7c8545bda6094875a5bf518de7f62b16'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -70,6 +70,20 @@ ARGPARSE_GEOMETRY_EPSG_HELP = 'The EPSG code of the coordinate system for the ge
 ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
                              'destructive overwrite of existing files. Default logging file is ' \
                              f'named {DEFAULT_LOG_FILENAME}'
+# Help for ignoring missing columns
+ARGPARSE_IGNORE_MISSING_COLS_HELP = 'Ignore any missing columns in the new definition (instead ' \
+                                    'of erroring out)'
+# Map a table name to another name
+ARGPARSE_MAP_TABLE_NAME_HELP = 'Case-sensitive map a table name to a new name (intended to be ' \
+                               'used when a source table name changes). E.g. previous_name=new_name'
+# The endpoint URL
+ARGPARSE_ESRI_ENDPOINT_HELP = f'URL to connect to. Default: {DEFAULT_ESRI_URL}'
+# The AGOL application to connect to
+ARGPARSE_ESRI_CLIENT_ID_HELP = 'The ID of the client to connect to. Default: ' \
+                               f'{DEFAULT_SURVEY123_CLIENT_ID}'
+# The feature of interest to get the schema from
+ARGPARSE_ESRI_FEATURE_ID_HELP = 'The ID of the feature to get the database schema from. ' \
+                                f'Default: {DEFAULT_FEATURE_ITEM_ID}'
 
 
 def _get_name_uuid() -> str:
@@ -95,8 +109,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser = argparse.ArgumentParser(prog=SCRIPT_NAME,
                                      description=ARGPARSE_PROGRAM_DESC,
                                      epilog=ARGPARSE_EPILOG)
-    parser.add_argument('json_file', nargs='+',
-                        help=ARGPARSE_JSON_FILE_HELP)
+    parser.add_argument('-json_file', help=ARGPARSE_JSON_FILE_HELP)
     parser.add_argument('-o', '--host', default=DEFAULT_HOST_NAME,
                         help=ARGPARSE_HOST_HELP)
     parser.add_argument('-d', '--database', help=ARGPARSE_DATABASE_HELP)
@@ -115,33 +128,40 @@ def get_arguments(logger: logging.Logger) -> tuple:
                         help=ARGPARSE_GEOMETRY_EPSG_HELP)
     parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
                         help=ARGPARSE_LOG_FILENAME_HELP)
+    parser.add_argument('--ignore_missing_cols',action='store_true',
+                        help=ARGPARSE_IGNORE_MISSING_COLS_HELP)
+    parser.add_argument('-m', '--map_name', action='append',
+                        help=ARGPARSE_MAP_TABLE_NAME_HELP)
+    parser.add_argument('-ee', '--esri_endpoint', default=DEFAULT_ESRI_URL,
+                        help=ARGPARSE_ESRI_ENDPOINT_HELP)
+    parser.add_argument('-ec', '--esri_client_id', default=DEFAULT_SURVEY123_CLIENT_ID,
+                        help=ARGPARSE_ESRI_CLIENT_ID_HELP)
+    parser.add_argument('-ef', '--esri_feature_id', default=DEFAULT_FEATURE_ITEM_ID,
+                        help=ARGPARSE_ESRI_FEATURE_ID_HELP)
     args = parser.parse_args()
 
-    # Find the JSON file and the password (which is allowed to be eliminated)
-    json_file = None
-    if not args.json_file:
-        # Raise argument error
-        raise ValueError('Missing a required argument')
+    # Read in the JSON if specified
+    schema = None
+    if args.json_file:
+        try:
+            with open(args.json_file, encoding="utf-8") as infile:
+                schema = json.load(infile)
+        except FileNotFoundError:
+            logger.error(f'Unable to open JSON file {args.json_file}')
+            sys.exit(11)
+        except json.JSONDecodeError:
+            logger.error(f'File is not valid JSON {args.json_file}')
+            sys.exit(12)
 
-    if len(args.json_file) == 1:
-        json_file = args.json_file[0]
-    else:
-        # Report the problem
-        logger.error('Too many arguments specified for input file')
-        parser.print_help()
-        sys.exit(10)
-
-    # Read in the JSON
-    try:
-        schema = None
-        with open(json_file, encoding="utf-8") as infile:
-            schema = json.load(infile)
-    except FileNotFoundError:
-        logger.error(f'Unable to open JSON file {json_file}')
-        sys.exit(11)
-    except json.JSONDecodeError:
-        logger.error(f'File is not valid JSON {json_file}')
-        sys.exit(12)
+    # Create the table name map
+    table_name_map = {}
+    if len(args.map_name) > 0:
+        for one_map in args.map_name:
+            if not '=' in one_map:
+                logger.error(f'Invalid table name mapping {one_map}')
+                sys.exit(13)
+            old_name,new_name = one_map.split('=', 1)
+            table_name_map[old_name] = new_name
 
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
@@ -152,7 +172,12 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'noviews': args.noviews,
                 'readonly': args.readonly,
                 'geometry_epsg': args.geometry_epsg,
-                'log_filename': args.log_filename
+                'log_filename': args.log_filename,
+                'ignore_missing_cols': args.ignore_missing_cols,
+                'table_name_map': table_name_map if table_name_map else None,
+                'esri_endpoint': args.esri_endpoint,
+                'esri_client_id': args.esri_client_id,
+                'esri_feature_id': args.esri_feature_id
                }
 
     # Return the loaded JSON
@@ -167,7 +192,7 @@ def init_logging(filename: str) -> logging.Logger:
         Returns the created logger instance
     """
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     # Create formatter
     formatter = logging.Formatter('%(levelname)s: %(message)s')
@@ -600,7 +625,13 @@ def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> d
     indexes = []
     values = []
     unique_field_id = 'objectid'
-    table_name = A2Database.sqlstr(esri_schema['name'])
+
+    # Check for a name map
+    table_name = esri_schema['name'] if not 'table_name_map' in opts \
+                                        or not opts['table_name_map'] \
+                                        or not esri_schema['name'] in opts['table_name_map'] \
+                    else opts['table_name_map'][esri_schema['name']]
+    table_name = A2Database.sqlstr(table_name)
     opts['logger'].info(f'HACK:   {table_name}')
 
     if 'uniqueIdField' in esri_schema:
@@ -645,7 +676,7 @@ def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> d
         indexes.extend(new_indexes)
 
     tables.append({
-        'name': esri_schema['name'],
+        'name': table_name,
         'columns': columns
         })
 
@@ -680,12 +711,14 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     verbose = 'verbose' in opts and opts['verbose']
     readonly = 'readonly' in opts and opts['readonly']
     force = 'force' in opts and opts['force']
+    ignore_missing_cols = 'ignore_missing_cols' in opts and opts['ignore_missing_cols']
 
     opts['logger'].info(f'Processing table: {table["name"]}')
     # Check if the table already exists
     matches = False
     if conn.table_exists(table['name']):
-        matches = conn.table_cols_match(table['name'], table['columns'], verbose)
+        matches = conn.table_cols_match(table['name'], table['columns'], verbose, \
+                                        ignore_missing_cols)
         if not matches:
             if not force and not readonly:
                 raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
@@ -707,7 +740,7 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
                                  'definition')
             conn.drop_table(table['name'], verbose, readonly=readonly)
         else:
-            opts['logger'].info(f'Table {table["name"]} already exists and matches definition')
+            opts['logger'].info(f'Table {table["name"]} already exists and passes definition check')
 
     # Create the table
     if not matches or force:
@@ -913,6 +946,42 @@ def update_database(conn: A2Database, schema: list, opts: dict) -> None:
         db_process_values(conn, one_schema['values'], one_schema['tables'], opts)
 
 
+def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
+    """Fetches the schema from the remote ESRI endpoint
+    Arguments:
+        endpoint_url - the ESRI endpoint to connect to
+        clientid - the ID of the client app to connect to
+        owner - the owner of the feature layer to look for
+        featureid - the ID of the feature layer
+    Returns:
+        The schema as a dict
+    """
+    # Connect
+    gis = GIS(endpoint_url, client_id=clientid)
+
+    # Get the feature layer
+    search_res = gis.content.get(featureid)
+    print(f'HACK: After get featureid {featureid}')
+
+    # Get the feature layer
+    feature_layer = None
+    if len(search_res) > 0:
+        feature_layer = search_res.layers[0]
+    else:
+        raise ValueError('Unable to access item with ID {featureid} at {endpoint_url}')
+    print('HACK: After feature layer')
+
+    # Start accumulating the table structure as JSON
+    cur_json = {"layers": [], "tables": []}
+    cur_json["tables"].append(json.loads(str(feature_layer.properties)))
+
+    for one_table in search_res.tables:
+        print(f'HACK: Table {one_table.properties.name}')
+        cur_json["tables"].append(json.loads(str(one_table.properties)))
+
+    return cur_json
+
+
 def create_update_database(schema_data: dict, opts: dict = None) -> None:
     """Parses the JSON data and checks if the database objects described are
         found - if not, it creates them; if they exist they are updated as needed
@@ -935,6 +1004,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
 
     # Get the user password if they need to specify one
     if opts['password'] is not False:
+        print('Connecting to database...')
         opts['password'] = getpass()
 
     # MySQL connection
@@ -950,6 +1020,16 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         opts['logger'].error('', exc_info=True, stack_info=True)
         opts['logger'].error('Please correct errors and try again')
         sys.exit(101)
+
+    # Get the schema if we don't have it already
+    if not schema_data:
+        try:
+            schema_data = get_esri_schema(opts['esri_endpoint'], opts['esri_client_id'],
+                                        opts['esri_feature_id'])
+        except ValueError:
+            opts['logger'].error('', exc_info=True)
+            opts['logger'].error('    Exception caught accessing ESRI server')
+            raise
 
     try:
         # Process any layers
@@ -986,7 +1066,7 @@ if __name__ == "__main__":
     try:
         json_data, other_opts = get_arguments(logging.getLogger())
         other_opts['logger'] = init_logging(other_opts['log_filename'])
-        if validate_json(json_data):
+        if not json_data or validate_json(json_data):
             create_update_database(json_data, other_opts)
     except Exception:
         other_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)

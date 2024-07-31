@@ -3,7 +3,6 @@
 
 import uuid
 import logging
-import sys
 from typing import Any, Optional
 import mysql.connector
 
@@ -259,6 +258,22 @@ class A2Database:
                     return True
         return False
 
+    @staticmethod
+    def _case_insensitive_find(needle: str, haystack: dict) -> bool:
+        """Looks for an index in the haystack that matches the needle. Only
+           searches one level deep.
+        Arguments:
+            needle: the string to look for
+            haystack: the dict to look in for the needle
+        Return:
+            True is returned if the needle is found in the haystack's indexes using a
+            case-insensitive search, and False otherwise.
+        Notes:
+            All indexes in the haystack are converted to strings before the comparison that
+            tries to match is made. The comparisons are all lower-case
+        """
+        return needle.lower() in (str(idx).lower() for idx in haystack.keys())
+
     @property
     def verbose(self):
         """Returns the verbosity of the database calls """
@@ -491,12 +506,14 @@ class A2Database:
 
         return self._cursor.rowcount > 0
 
-    def table_cols_match(self, table_name: str, col_info: tuple, verbose: bool=None) -> bool:
+    def table_cols_match(self, table_name: str, col_info: tuple, verbose: bool=None,
+                         ignore_missing_cols: bool=None) -> bool:
         """Determines if the current columns in the database table matches the specification
         Arguments:
             table_name: the name of the table to drop
             col_info: see create_table() for the list of fields used
             verbose: override default for printing query information (prints if True)
+            ignore_missing_cols: ignore any missing columns in new table definition
         """
         if verbose is None:
             verbose = self._verbose
@@ -518,21 +535,28 @@ class A2Database:
                                                 enumerate(col_info)}
 
         # Loop through the columns returned
-        # column_key = 'PRI'
         found_cols = []
         for col_name, col_type, col_char_max_len, col_key, _, numeric_scale, \
                                 is_nullable, auto_increment, column_default in self._cursor:
-            if not col_name in col_indexes:
+            if not self._case_insensitive_find(col_name, col_indexes):
+                if not ignore_missing_cols:
+                    if verbose:
+                        self._logger.warn(f'Table "{table_name}" column "{col_name}" is not ' \
+                               'found in new table definition')
+                    self._cursor.reset()
+                    return False
+
                 if verbose:
-                    self._logger.info(f'Table "{table_name}" column "{col_name}" is not found ' \
-                           'in new table definition')
-                self._cursor.reset()
-                return False
+                    self._logger.warn(f'Ignoring table "{table_name}" column "{col_name}" ' \
+                           'is not found in new table definition')
+                    continue
+
             # Get the matched column information by name
-            match_col = col_info[col_indexes[col_name]]
+            if col_name in col_indexes:
+                match_col = col_info[col_indexes[col_name]]
 
             if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
-                                            match_col['type']):
+                                            match_col['type']) and not ignore_missing_cols:
                 self._cursor.reset()
                 return False
 
@@ -566,7 +590,7 @@ class A2Database:
             self._logger.info(f'Table {table_name} has fewer defined columns than it\'s definition')
             for one_col in extra_cols:
                 self._logger.info(f'    {one_col}')
-        return len(found_cols) == len(col_info)
+        return len(found_cols) == len(col_info) or ignore_missing_cols
 
     def drop_table(self, table_name: str, verbose: bool=None, readonly: bool=False) -> None:
         """Drops the specified table from the database. Will remove any foreign keys dependent
@@ -669,7 +693,6 @@ class A2Database:
                     col_sql += f' SRID {one_col["srid"]}'
 
             if 'is_primary' in one_col and one_col['is_primary']:
-                print('HACK:   adding primary', flush=True)
                 col_sql += ' PRIMARY KEY'
                 idx_created['PRIMARY'] = (f'`{col_name}`',)
 
