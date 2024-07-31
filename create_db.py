@@ -956,10 +956,10 @@ def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
     Returns:
         The schema as a dict
     """
-    # Connect
+    # Connect to ESRI
     gis = GIS(endpoint_url, client_id=clientid)
 
-    # Get the feature layer
+    # Search for the feature layer
     search_res = gis.content.get(featureid)
     print(f'HACK: After get featureid {featureid}')
 

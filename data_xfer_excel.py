@@ -11,6 +11,7 @@ from typing import Optional
 import openpyxl
 from openpyxl import load_workbook
 import mysql.connector
+from arcgis.gis import GIS
 
 import a2database
 from a2database import A2Database
@@ -44,6 +45,13 @@ DEFAULT_GEOM_EPSG = 4326
 
 # Default name for logging output
 DEFAULT_LOG_FILENAME = 'data_xfer_excel.out'
+
+# AGOL URL
+DEFAULT_ESRI_URL = 'https://uagis.maps.arcgis.com'
+# The client ID used to connect to AGOL
+DEFAULT_SURVEY123_CLIENT_ID ='7X8jzC2i59RTyBVp'
+# The feature item ID
+DEFAULT_FEATURE_ITEM_ID = '7c8545bda6094875a5bf518de7f62b16'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -96,6 +104,17 @@ ARGPARSE_RESET_HELP = 'Deletes the contents of the tables to the loaded data (de
 ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
                              'destructive overwrite of existing files. Default logging file is ' \
                              f'named {DEFAULT_LOG_FILENAME}'
+# Map a table name to another name
+ARGPARSE_MAP_TABLE_NAME_HELP = 'Case-sensitive map a table name to a new name (intended to be ' \
+                               'used when a source table name changes). E.g. previous_name=new_name'
+# The endpoint URL
+ARGPARSE_ESRI_ENDPOINT_HELP = f'URL to connect to. Default: {DEFAULT_ESRI_URL}'
+# The AGOL application to connect to
+ARGPARSE_ESRI_CLIENT_ID_HELP = 'The ID of the client to connect to. Default: ' \
+                               f'{DEFAULT_SURVEY123_CLIENT_ID}'
+# The feature of interest to get the schema from
+ARGPARSE_ESRI_FEATURE_ID_HELP = 'The ID of the feature to get the database schema from. ' \
+                                f'Default: {DEFAULT_FEATURE_ITEM_ID}'
 
 
 def get_arguments(logger: logging.Logger) -> tuple:
@@ -113,7 +132,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser = argparse.ArgumentParser(prog=SCRIPT_NAME,
                                      description=ARGPARSE_PROGRAM_DESC,
                                      epilog=ARGPARSE_EPILOG)
-    parser.add_argument('excel_file', nargs='+',
+    parser.add_argument('-excel_file',
                         help=ARGPARSE_EXCEL_FILE_HELP)
     parser.add_argument('-o', '--host', default=DEFAULT_HOST_NAME,
                         help=ARGPARSE_HOST_HELP)
@@ -130,7 +149,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser.add_argument('--col_names_row', type=int, default=DEFAULT_COL_NAMES_ROW,
                         help=ARGPARSE_COL_NAMES_ROW_HELP)
     parser.add_argument('--col_names', help=ARGPARSE_COL_NAMES_HELP)
-    parser.add_argument('--col_name_map', nargs='*', action='extend',
+    parser.add_argument('--col_name_map', action='append',,
                         help=ARRGPARSE_COL_NAME_MAP_HELP)
     parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
     parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
@@ -142,29 +161,36 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser.add_argument('--reset', action='store_true', help=ARGPARSE_RESET_HELP)
     parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
                         help=ARGPARSE_LOG_FILENAME_HELP)
+    parser.add_argument('-m', '--map_name', action='append',
+                        help=ARGPARSE_MAP_TABLE_NAME_HELP)
+    parser.add_argument('-ee', '--esri_endpoint', default=DEFAULT_ESRI_URL,
+                        help=ARGPARSE_ESRI_ENDPOINT_HELP)
+    parser.add_argument('-ec', '--esri_client_id', default=DEFAULT_SURVEY123_CLIENT_ID,
+                        help=ARGPARSE_ESRI_CLIENT_ID_HELP)
+    parser.add_argument('-ef', '--esri_feature_id', default=DEFAULT_FEATURE_ITEM_ID,
+                        help=ARGPARSE_ESRI_FEATURE_ID_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
     excel_file = None
-    if not args.excel_file:
-        # Raise argument error
-        raise ValueError('Missing a required argument')
+    if args.excel_file:
+        excel_file = args.excel_file
+        try:
+            with open(excel_file, encoding="utf-8"):
+                pass
+        except FileNotFoundError:
+            logger.error(f'Unable to open EXCEL file {excel_file}')
+            sys.exit(11)
 
-    if len(args.excel_file) == 1:
-        excel_file = args.excel_file[0]
-    else:
-        # Report the problem
-        logger.error('Too many arguments specified for input file')
-        parser.print_help()
-        sys.exit(10)
-
-    # Check that we can access the EXCEL file
-    try:
-        with open(excel_file, encoding="utf-8"):
-            pass
-    except FileNotFoundError:
-        logger.error(f'Unable to open EXCEL file {excel_file}')
-        sys.exit(11)
+    # Create the table name map
+    table_name_map = {}
+    if len(args.map_name) > 0:
+        for one_map in args.map_name:
+            if not '=' in one_map:
+                logger.error(f'Invalid table name mapping {one_map}')
+                sys.exit(13)
+            old_name,new_name = one_map.split('=', 1)
+            table_name_map[old_name] = new_name
 
     cmd_opts = {'force': args.force,
                 'verbose': args.verbose,
@@ -183,7 +209,11 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'database_epsg': args.database_epsg,
                 'primary_key': args.key_name,
                 'reset': args.reset,
-                'log_filename': args.log_filename
+                'log_filename': args.log_filename,
+                'table_name_map': table_name_map if table_name_map else None,
+                'esri_endpoint': args.esri_endpoint,
+                'esri_client_id': args.esri_client_id,
+                'esri_feature_id': args.esri_feature_id
                }
 
     # Postprocess column name mapping if there are any
@@ -523,7 +553,7 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
                                 geom_col_info=geom_col_info,
                                 verbose=verbose)
             if data_same:
-                opts['logger'].info(f'Skipping unchanged data row with primary key {pk_value}')
+                opts['logger'].info(f'Skipping unchanged data row: primary key value {pk_value}')
                 skipped_rows = skipped_rows + 1
                 continue
 
@@ -544,6 +574,115 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
                             f' rows with {skipped_rows} not updated')
     else:
         opts['logger'].info(f'    Processed {added_updated_rows} rows')
+
+
+def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_values: tuple, opts: dict,
+                     verbose: bool=False) -> bool:
+    """Handles the processing of one row of EsRI data
+    Arguments:
+        conn: the database connection
+        table_name: the name of the target table
+        col_names: the row names
+        col_values: the row values
+        opts: additional options
+        verbose: whether verbose mode is enabled
+    Returns:
+        Returns True if the data was added or updated, and False if no changes were made
+    """
+    names = list(col_names)
+    values = list(col_values)
+    geom_col_info = None
+    col_alias = None
+
+    # Get the X and Y field names
+    if 'SHAPE@' in names:
+        shape_data = values[names.index('SHAPE@')]
+        names.append('x')
+        names.append('y')
+        values.append(shape_data['x'])
+        values.append(shape_data['y'])
+        epsg = shape_data['spatialReference']['wkid']
+
+        # Find geometry columns
+        geom_col_info, col_alias = conn.get_col_info(table_name, names, opts['geometry_epsg'],
+                                            colX1=opts['point_col_x'], rowY1=opts['point_col_y'])
+
+    # Skip over missing primary keys
+    pk_value = values[names.index(opts['primary_key'])]
+    if pk_value is None:
+        opts['logger'].info('Skipping data row with null primary key value: ' \
+              f'row {added_updated_rows + skipped_rows + 1}')
+        skipped_rows = skipped_rows + 1
+        continue
+
+    # If the data is not in the table already, add it in
+    data_exists = conn.check_data_exists_pk(table_name, opts['primary_key'], pk_value, verbose=verbose):
+    if data_exists and not opts['force']:
+        skipped_rows = skipped_rows + 1
+        continue
+
+    if data_exists:
+        if conn.check_data_exists(table_name, col_names, col_values, geom_col_info=geom_col_info,
+                                                                        verbose=verbose):
+            opts['logger'].info(f'Skipping unchanged data row: primary key value {pk_value}')
+            skipped_rows = skipped_rows + 1
+            continue
+
+    # Adding in the data
+    added_updated_rows = added_updated_rows + 1
+    if geom_col_info and conn.epsg != epsg:
+        col_values = transform_geom_cols(col_names, col_values, geom_col_info, \
+                                         epsg, conn.epsg)
+    conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
+                         update=data_exists, \
+                         primary_key=opts['primary_key'],
+                         verbose=verbose)
+
+
+def process_esri_data(conn: A2Database, endpoint: str, client_id: str, feature_id: str, 
+                        opts: dict) -> None:
+    """Downloads and processes the data from the specified feature
+    Arguments:
+        conn: the database connection
+        endpoint: the ESRI endpoint to connect to
+        client_id: the ESRI app client ID
+        feature_id: the feature ID to download data from
+        opts: additional options
+    """
+    verbose = 'verbose' in opts and opts['verbose']
+
+    # Connect to ESRI
+    gis = GIS(endpoint_url, client_id=clientid)
+
+    # Search for the feature layer
+    search_res = gis.content.get(featureid)
+    print(f'HACK: After get featureid {featureid}')
+
+    # Get the feature layer
+    feature_layer = None
+    if len(search_res) > 0:
+        feature_layer = search_res.layers[0]
+    else:
+        raise ValueError('Unable to access item with ID {featureid} at {endpoint_url}')
+    print('HACK: After feature layer')
+
+    # Get the table name
+    table_name = feature_layer.properties['name']
+    if 'table_name_map' in opts and opts['table_name_map'] and table_name in opts['table_name_map']:
+        table_name = opts['table_name_map'][table_name]
+
+    # Process feature and table data
+    skipped_rows = 0
+    added_updated_rows = 0
+
+    # Process feature data
+    for one_res in feature_layer.query('OBJECTId >= 0'):
+        values, names = one_res.as_row
+        process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose)
+
+
+    # Process data from each of the tables
+    for one_table in search_res.tables:
 
 
 def load_excel_file(filepath: str, opts: dict) -> None:
@@ -583,12 +722,16 @@ def load_excel_file(filepath: str, opts: dict) -> None:
     db_conn.epsg = opts['database_epsg']
 
     # Open the EXCEL file and process each tab
-    workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
+    if filepath:
+        workbook = load_workbook(filename=filepath, read_only=True, data_only=True)
 
-    opts['logger'].info(f'Updating using {filepath}')
+        opts['logger'].info(f'Updating using {filepath}')
 
-    for one_sheet in workbook.worksheets:
-        process_sheet(one_sheet, db_conn, opts)
+        for one_sheet in workbook.worksheets:
+            process_sheet(one_sheet, db_conn, opts)
+    else:
+        process_esri_data(db_conn, opts['esri_endpoint'], opts['esri_client_id'],
+                            opts['esri_feature_id'], opts)
 
     db_conn.commit()
 
