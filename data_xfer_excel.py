@@ -149,7 +149,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser.add_argument('--col_names_row', type=int, default=DEFAULT_COL_NAMES_ROW,
                         help=ARGPARSE_COL_NAMES_ROW_HELP)
     parser.add_argument('--col_names', help=ARGPARSE_COL_NAMES_HELP)
-    parser.add_argument('--col_name_map', action='append',,
+    parser.add_argument('--col_name_map', action='append',
                         help=ARRGPARSE_COL_NAME_MAP_HELP)
     parser.add_argument('--point_cols', help=ARGPARSE_POINT_COLS_HELP)
     parser.add_argument('--geometry_epsg', type=int, default=DEFAULT_GEOM_EPSG,
@@ -576,8 +576,8 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
         opts['logger'].info(f'    Processed {added_updated_rows} rows')
 
 
-def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_values: tuple, opts: dict,
-                     verbose: bool=False) -> bool:
+def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_values: tuple,
+                     opts: dict, verbose: bool=False) -> bool:
     """Handles the processing of one row of EsRI data
     Arguments:
         conn: the database connection
@@ -610,26 +610,22 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
     # Skip over missing primary keys
     pk_value = values[names.index(opts['primary_key'])]
     if pk_value is None:
-        opts['logger'].info('Skipping data row with null primary key value: ' \
-              f'row {added_updated_rows + skipped_rows + 1}')
-        skipped_rows = skipped_rows + 1
-        continue
+        opts['logger'].info('Skipping data row with null primary key value')
+        return False
 
     # If the data is not in the table already, add it in
-    data_exists = conn.check_data_exists_pk(table_name, opts['primary_key'], pk_value, verbose=verbose):
+    data_exists = conn.check_data_exists_pk(table_name, opts['primary_key'], pk_value,
+                                                                            verbose=verbose)
     if data_exists and not opts['force']:
-        skipped_rows = skipped_rows + 1
-        continue
+        return False
 
     if data_exists:
         if conn.check_data_exists(table_name, col_names, col_values, geom_col_info=geom_col_info,
                                                                         verbose=verbose):
             opts['logger'].info(f'Skipping unchanged data row: primary key value {pk_value}')
-            skipped_rows = skipped_rows + 1
-            continue
+            return False
 
     # Adding in the data
-    added_updated_rows = added_updated_rows + 1
     if geom_col_info and conn.epsg != epsg:
         col_values = transform_geom_cols(col_names, col_values, geom_col_info, \
                                          epsg, conn.epsg)
@@ -638,13 +634,15 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
                          primary_key=opts['primary_key'],
                          verbose=verbose)
 
+    return True
 
-def process_esri_data(conn: A2Database, endpoint: str, client_id: str, feature_id: str, 
+
+def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, feature_id: str,
                         opts: dict) -> None:
     """Downloads and processes the data from the specified feature
     Arguments:
         conn: the database connection
-        endpoint: the ESRI endpoint to connect to
+        endpoint_url: the ESRI endpoint to connect to
         client_id: the ESRI app client ID
         feature_id: the feature ID to download data from
         opts: additional options
@@ -652,37 +650,89 @@ def process_esri_data(conn: A2Database, endpoint: str, client_id: str, feature_i
     verbose = 'verbose' in opts and opts['verbose']
 
     # Connect to ESRI
-    gis = GIS(endpoint_url, client_id=clientid)
+    gis = GIS(endpoint_url, client_id=client_id)
 
     # Search for the feature layer
-    search_res = gis.content.get(featureid)
-    print(f'HACK: After get featureid {featureid}')
+    search_res = gis.content.get(feature_id)
+    print(f'HACK: After get featureid {feature_id}')
 
     # Get the feature layer
     feature_layer = None
     if len(search_res) > 0:
         feature_layer = search_res.layers[0]
     else:
-        raise ValueError('Unable to access item with ID {featureid} at {endpoint_url}')
+        raise ValueError('Unable to access item with ID {feature_id} at {endpoint_url}')
     print('HACK: After feature layer')
+
+    # Process feature and table data
+    skipped_rows = 0
+    added_updated_rows = 0
 
     # Get the table name
     table_name = feature_layer.properties['name']
     if 'table_name_map' in opts and opts['table_name_map'] and table_name in opts['table_name_map']:
         table_name = opts['table_name_map'][table_name]
 
-    # Process feature and table data
-    skipped_rows = 0
-    added_updated_rows = 0
+    # Check if we're resetting the tables
+    saved_constraints = None
+    if 'reset' in opts and opts['reset']:
+        saved_constraints = db_get_fk_constraints(conn, table_name, opts['logger'], verbose)
+        db_remove_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
+        query = f'TRUNCATE TABLE {table_name}'
+        if verbose:
+            opts['logger'].info(query)
+        conn.execute(query)
+        conn.reset()
 
     # Process feature data
     for one_res in feature_layer.query('OBJECTId >= 0'):
         values, names = one_res.as_row
-        process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose)
+        names = (map_col_name((table_name,), one_name, opts['col_name_map']) for one_name in names)
+        if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
+            added_updated_rows = added_updated_rows + 1
+        else:
+            skipped_rows = skipped_rows + 1
+
+    if saved_constraints:
+        db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
 
 
     # Process data from each of the tables
     for one_table in search_res.tables:
+        # Get the table name
+        table_name = feature_layer.properties['name']
+        if 'table_name_map' in opts and opts['table_name_map'] and \
+                                                        table_name in opts['table_name_map']:
+            table_name = opts['table_name_map'][table_name]
+
+        # Check if we're resetting the tables
+        saved_constraints = None
+        if 'reset' in opts and opts['reset']:
+            saved_constraints = db_get_fk_constraints(conn, table_name, opts['logger'], verbose)
+            db_remove_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
+            query = f'TRUNCATE TABLE {table_name}'
+            if verbose:
+                opts['logger'].info(query)
+            conn.execute(query)
+            conn.reset()
+
+        for one_res in one_table.query('OBJECTId >= 0'):
+            values, names = one_res.as_row
+            names = (map_col_name((table_name,), one_name, opts['col_name_map'])
+                                                                    for one_name in names)
+            if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
+                added_updated_rows = added_updated_rows + 1
+            else:
+                skipped_rows = skipped_rows + 1
+
+        if saved_constraints:
+            db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
+
+    if skipped_rows:
+        opts['logger'].info('    Processed ' + str(added_updated_rows + skipped_rows) + \
+                            f' rows with {skipped_rows} not updated')
+    else:
+        opts['logger'].info(f'    Processed {added_updated_rows} rows')
 
 
 def load_excel_file(filepath: str, opts: dict) -> None:
