@@ -188,7 +188,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
 
     # Create the table name map
     table_name_map = {}
-    if len(args.map_name) > 0:
+    if args.map_name and len(args.map_name) > 0:
         for one_map in args.map_name:
             if not '=' in one_map:
                 logger.error(f'Invalid table name mapping {one_map}')

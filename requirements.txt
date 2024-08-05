@@ -1,3 +1,6 @@
 getpass
 openpyxl
-mysql-connector-python
+arcgis
+mysql
+mysql-connector
+dask[dataframe]
