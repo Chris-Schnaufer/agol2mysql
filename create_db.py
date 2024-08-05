@@ -1053,7 +1053,7 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
     # Processes the discovered database objects
     update_database(db_conn, layers + tables, opts)
 
-    opts['logger'].info('Completed processing JSON file' + \
+    opts['logger'].info('Completed processing schema' + \
                     (' in READONLY mode' if opts['readonly'] else ''))
 
 

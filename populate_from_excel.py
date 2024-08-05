@@ -154,6 +154,8 @@ ARGPARSE_NO_PRIMARY_HELP = 'No primary key is available'
 ARGPARSE_LOG_FILENAME_HELP = 'Change the name of the file where logging gets saved. This is a ' \
                              'destructive overwrite of existing files. Default logging file is ' \
                              f'named {DEFAULT_LOG_FILENAME}'
+# Lowering the debug level to DEBUG
+ARGPARSE_LOGGING_DEBUG_HELP = 'Increases the logging level to include debugging messages'
 
 def get_arguments(logger: logging.Logger) -> tuple:
     """ Returns the data from the parsed command line arguments
@@ -214,6 +216,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
     parser.add_argument('--no_primary', action='store_true', help=ARGPARSE_NO_PRIMARY_HELP)
     parser.add_argument('--log_filename', default=DEFAULT_LOG_FILENAME,
                         help=ARGPARSE_LOG_FILENAME_HELP)
+    parser.add_argument('--debug', help=ARGPARSE_LOGGING_DEBUG_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -279,22 +282,24 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'primary_key_text': args.pk_force_text,
                 'no_primary': args.no_primary,
                 'noviews': args.noviews,
-                'log_filename': args.log_filename
+                'log_filename': args.log_filename,
+                'debug': args.debug
                }
 
     # Return the loaded JSON
     return excel_file, cmd_opts
 
 
-def init_logging(filename: str) -> logging.Logger:
+def init_logging(filename: str, level: int=logging.INFO) -> logging.Logger:
     """Initializes the logging
     Arguments:
         filename: name of the file to save logging to
+        level: the logging level to use
     Return:
         Returns the created logger instance
     """
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(level if level is not None else logging.INFO)
 
     # Create formatter
     formatter = logging.Formatter('%(levelname)s: %(message)s')
@@ -522,7 +527,8 @@ def db_update_schema(table_name: str, schema_sheet: openpyxl.worksheet.worksheet
             if one_row[col_name_idx].value.casefold().replace(' ', '_') not in lower_col_names:
                 continue
         # Skip over the point column names if we're creating a point column
-        if point_col_names and one_row[col_name_idx].value.casefold().replace(' ', '_') in point_col_names:
+        if point_col_names and one_row[col_name_idx].value.casefold().replace(' ', '_') \
+                                                                            in point_col_names:
             continue
         # Make sure this column belongs to the current table
         col_table = one_row[col_table_idx].value
@@ -639,7 +645,6 @@ def process_sheets(data_sheet: openpyxl.worksheet.worksheet.Worksheet, \
                                 not opts['no_primary']) or 'no_primary' not in opts else None
     primary_key_name = opts['primary_key'] if ('no_primary' in opts and \
                                 not opts['no_primary']) or 'no_primary' not in opts else None
-    print(f'HACK: primary key: {primary_key_name}')
     for one_row in rows_iter:
         col_values = tuple(one_cell.value for idx,one_cell in enumerate(one_row) \
                                                                         if idx not in ignore_idx)
@@ -765,7 +770,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
 if __name__ == '__main__':
     try:
         excel_filename, user_opts = get_arguments(logging.getLogger())
-        user_opts['logger'] = init_logging(user_opts['log_filename'])
+        user_opts['logger'] = init_logging(user_opts['log_filename'], user_opts['debug'])
         load_excel_file(excel_filename, user_opts)
     except Exception:
         user_opts['logger'].error('Unhandled exception caught', exc_info=True, stack_info=True)

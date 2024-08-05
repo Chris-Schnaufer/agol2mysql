@@ -389,7 +389,7 @@ class A2Database:
         query = f'SELECT count(1) FROM {table_name} WHERE {clean_key}=%s'
 
         if verbose is True:
-            self._logger.info(f'  {query}')
+            self._logger.info(f'  {query} {primarykeyvalue}')
 
         self._cursor.execute(query, (primarykeyvalue,))
         res = self._cursor.fetchone()

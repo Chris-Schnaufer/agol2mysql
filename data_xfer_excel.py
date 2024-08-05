@@ -116,6 +116,8 @@ ARGPARSE_ESRI_CLIENT_ID_HELP = 'The ID of the client to connect to. Default: ' \
 # The feature of interest to get the schema from
 ARGPARSE_ESRI_FEATURE_ID_HELP = 'The ID of the feature to get the database schema from. ' \
                                 f'Default: {DEFAULT_FEATURE_ITEM_ID}'
+# Lowering the debug level to DEBUG
+ARGPARSE_LOGGING_DEBUG_HELP = 'Increases the logging level to include debugging messages'
 
 
 def get_arguments(logger: logging.Logger) -> tuple:
@@ -170,6 +172,7 @@ def get_arguments(logger: logging.Logger) -> tuple:
                         help=ARGPARSE_ESRI_CLIENT_ID_HELP)
     parser.add_argument('-ef', '--esri_feature_id', default=DEFAULT_FEATURE_ITEM_ID,
                         help=ARGPARSE_ESRI_FEATURE_ID_HELP)
+    parser.add_argument('--debug', help=ARGPARSE_LOGGING_DEBUG_HELP)
     args = parser.parse_args()
 
     # Find the EXCEL file and the password (which is allowed to be eliminated)
@@ -214,7 +217,8 @@ def get_arguments(logger: logging.Logger) -> tuple:
                 'table_name_map': table_name_map if table_name_map else None,
                 'esri_endpoint': args.esri_endpoint,
                 'esri_client_id': args.esri_client_id,
-                'esri_feature_id': args.esri_feature_id
+                'esri_feature_id': args.esri_feature_id,
+                'debug': args.debug
                }
 
     # Postprocess column name mapping if there are any
@@ -233,15 +237,16 @@ def get_arguments(logger: logging.Logger) -> tuple:
     return excel_file, cmd_opts
 
 
-def init_logging(filename: str) -> logging.Logger:
+def init_logging(filename: str, level: int=logging.INFO) -> logging.Logger:
     """Initializes the logging
     Arguments:
         filename: name of the file to save logging to
+        level: the logging level to use
     Return:
         Returns the created logger instance
     """
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(level if level is not None else logging.INFO)
 
     # Create formatter
     formatter = logging.Formatter('%(levelname)s: %(message)s')
@@ -748,7 +753,7 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
             if date_indexes:
                 values = tuple(values)
                 values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
-                                date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
+                            date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
             if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
                 added_updated_rows = added_updated_rows + 1
             else:
@@ -819,7 +824,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
 if __name__ == '__main__':
     try:
         excel_filename, user_opts = get_arguments(logging.getLogger())
-        user_opts['logger'] = init_logging(user_opts['log_filename'])
+        user_opts['logger'] = init_logging(user_opts['log_filename'], user_opts['debug'])
         load_excel_file(excel_filename, user_opts)
     except Exception:
         if user_opts and 'logger' in user_opts and user_opts['logger']:
