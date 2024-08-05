@@ -6,6 +6,7 @@ import os
 import argparse
 import sys
 import logging
+from datetime import datetime
 from getpass import getpass
 from typing import Optional
 import openpyxl
@@ -510,7 +511,6 @@ def process_sheet(sheet: openpyxl.worksheet.worksheet.Worksheet, conn: A2Databas
             # Check if we're mapping this name
             col_names.append(map_col_name((sheet.title, table_name), one_col.value,
                                           opts['col_name_map']))
-    opts['logger'].info(f'HACK: COL NAMES: {col_names}')
 
     # Find geometry columns
     geom_col_info, col_alias = conn.get_col_info(table_name, col_names, opts['geometry_epsg'],
@@ -596,15 +596,20 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
 
     # Get the X and Y field names
     if 'SHAPE@' in names:
-        shape_data = values[names.index('SHAPE@')]
+        shape_index = names.index('SHAPE@')
+        shape_data = values[shape_index]
         names.append('x')
         names.append('y')
         values.append(shape_data['x'])
         values.append(shape_data['y'])
         epsg = shape_data['spatialReference']['wkid']
 
-        # Find geometry columns
-        geom_col_info, col_alias = conn.get_col_info(table_name, names, opts['geometry_epsg'],
+        # Remove shape entry from names and values
+        names.pop(shape_index)
+        values.pop(shape_index)
+
+    # Find geometry columns
+    geom_col_info, col_alias = conn.get_col_info(table_name, names, opts['geometry_epsg'],
                                             colX1=opts['point_col_x'], rowY1=opts['point_col_y'])
 
     # Skip over missing primary keys
@@ -620,16 +625,15 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
         return False
 
     if data_exists:
-        if conn.check_data_exists(table_name, col_names, col_values, geom_col_info=geom_col_info,
+        if conn.check_data_exists(table_name, names, values, geom_col_info=geom_col_info,
                                                                         verbose=verbose):
             opts['logger'].info(f'Skipping unchanged data row: primary key value {pk_value}')
             return False
 
     # Adding in the data
     if geom_col_info and conn.epsg != epsg:
-        col_values = transform_geom_cols(col_names, col_values, geom_col_info, \
-                                         epsg, conn.epsg)
-    conn.add_update_data(table_name, col_names, col_values, col_alias, geom_col_info, \
+        values = transform_geom_cols(names, values, geom_col_info, epsg, conn.epsg)
+    conn.add_update_data(table_name, names, values, col_alias, geom_col_info, \
                          update=data_exists, \
                          primary_key=opts['primary_key'],
                          verbose=verbose)
@@ -649,12 +653,13 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
     """
     verbose = 'verbose' in opts and opts['verbose']
 
+    opts['logger'].info('Pulling data from ESRI')
+
     # Connect to ESRI
     gis = GIS(endpoint_url, client_id=client_id)
 
     # Search for the feature layer
     search_res = gis.content.get(feature_id)
-    print(f'HACK: After get featureid {feature_id}')
 
     # Get the feature layer
     feature_layer = None
@@ -662,7 +667,6 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
         feature_layer = search_res.layers[0]
     else:
         raise ValueError('Unable to access item with ID {feature_id} at {endpoint_url}')
-    print('HACK: After feature layer')
 
     # Process feature and table data
     skipped_rows = 0
@@ -670,8 +674,10 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
 
     # Get the table name
     table_name = feature_layer.properties['name']
+    opts['logger'].info(f'Processing ESRI table {table_name}')
     if 'table_name_map' in opts and opts['table_name_map'] and table_name in opts['table_name_map']:
         table_name = opts['table_name_map'][table_name]
+        opts['logger'].info(f'    table name mapped for database: {table_name}')
 
     # Check if we're resetting the tables
     saved_constraints = None
@@ -684,10 +690,21 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
         conn.execute(query)
         conn.reset()
 
+    # Get date indexes
+    date_indexes = []
+    for field_idx, one_field in enumerate(feature_layer.properties['fields']):
+        if one_field['type'] == 'esriFieldTypeDate':
+            date_indexes.append(field_idx)
+
     # Process feature data
     for one_res in feature_layer.query('OBJECTId >= 0'):
         values, names = one_res.as_row
-        names = (map_col_name((table_name,), one_name, opts['col_name_map']) for one_name in names)
+        names = tuple(map_col_name((table_name,), one_name, opts['col_name_map']) \
+                                                                    for one_name in names)
+        if date_indexes:
+            values = tuple(values)
+            values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
+                            date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
         if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
             added_updated_rows = added_updated_rows + 1
         else:
@@ -700,10 +717,12 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
     # Process data from each of the tables
     for one_table in search_res.tables:
         # Get the table name
-        table_name = feature_layer.properties['name']
+        table_name = one_table.properties['name']
+        opts['logger'].info(f'Processing next ESRI table {table_name}')
         if 'table_name_map' in opts and opts['table_name_map'] and \
                                                         table_name in opts['table_name_map']:
             table_name = opts['table_name_map'][table_name]
+            opts['logger'].info(f'    table name mapped for database: {table_name}')
 
         # Check if we're resetting the tables
         saved_constraints = None
@@ -716,10 +735,20 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
             conn.execute(query)
             conn.reset()
 
+        # Get date indexes
+        date_indexes = []
+        for field_idx, one_field in enumerate(one_table.properties['fields']):
+            if one_field['type'] == 'esriFieldTypeDate':
+                date_indexes.append(field_idx)
+
         for one_res in one_table.query('OBJECTId >= 0'):
             values, names = one_res.as_row
             names = (map_col_name((table_name,), one_name, opts['col_name_map'])
                                                                     for one_name in names)
+            if date_indexes:
+                values = tuple(values)
+                values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
+                                date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
             if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
                 added_updated_rows = added_updated_rows + 1
             else:
@@ -752,6 +781,7 @@ def load_excel_file(filepath: str, opts: dict) -> None:
 
     # Get the user password if they need to specify one
     if opts['password'] is not False:
+        print('Connecting to database...')
         opts['password'] = getpass()
 
     # MySQL connection

@@ -632,7 +632,7 @@ def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> d
                                         or not esri_schema['name'] in opts['table_name_map'] \
                     else opts['table_name_map'][esri_schema['name']]
     table_name = A2Database.sqlstr(table_name)
-    opts['logger'].info(f'HACK:   {table_name}')
+    opts['logger'].info(f'Processing: {table_name}')
 
     if 'uniqueIdField' in esri_schema:
         if isinstance(esri_schema['uniqueIdField'], dict) and \
@@ -961,7 +961,6 @@ def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
 
     # Search for the feature layer
     search_res = gis.content.get(featureid)
-    print(f'HACK: After get featureid {featureid}')
 
     # Get the feature layer
     feature_layer = None
@@ -969,14 +968,12 @@ def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
         feature_layer = search_res.layers[0]
     else:
         raise ValueError('Unable to access item with ID {featureid} at {endpoint_url}')
-    print('HACK: After feature layer')
 
     # Start accumulating the table structure as JSON
     cur_json = {"layers": [], "tables": []}
     cur_json["tables"].append(json.loads(str(feature_layer.properties)))
 
     for one_table in search_res.tables:
-        print(f'HACK: Table {one_table.properties.name}')
         cur_json["tables"].append(json.loads(str(one_table.properties)))
 
     return cur_json
@@ -1035,7 +1032,6 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         # Process any layers
         index = 0
         if 'layers' in schema_data:
-            opts['logger'].info('HACK: LAYERS')
             layers = [None] * len(schema_data['layers'])
             for one_layer in schema_data['layers']:
                 layers[index] = process_layer_table(one_layer, relationships, opts)
@@ -1044,7 +1040,6 @@ def create_update_database(schema_data: dict, opts: dict = None) -> None:
         # Process any tables
         index = 0
         if 'tables' in schema_data:
-            opts['logger'].info('HACK: TABLES')
             tables = [None] * len(schema_data['tables'])
             for one_table in schema_data['tables']:
                 tables[index] = process_layer_table(one_table, relationships, opts)
