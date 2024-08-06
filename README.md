@@ -1,36 +1,39 @@
 # About
 This project has the scripts that can help you move your AGOL data to a MySQL database.
 
-Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database and executing queries using SQL Workbench
+Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database with SQL Workbenchand executing queries.
 
-The scripts can be used in a less automated fasion (Manual) and a more automated fashion (Automated).
+The scripts can be used in a less automated fasion (Manual) and a more automated fashion (Direct).
 The sections below reflect that diffence and are names as such.
+The [Direct](#direct-steps) steps connect directly to ESRI and automatically fetches the schema and the data.
 Follow the [Manual](#manual-steps) steps if you have ESRI schema JSON files and/or ESRI exported Excel files.
-The [Automated](#automated-steps) steps connect directly to ESRI and automatically fetches the schema and the data.
 
 # Prerequisites
 The scripts in this repository use Python3.10 or later.
-To check what Python version you have, open a console window and type the following command.
+To check what Python version you have, open a console (or terminal) window and type the following command.
 ```bash
 python3 --version
 ```
 To ensure you have all the needed Python modules installed you can run the [pip3](https://pip.pypa.io/en/stable/) command.
 The following command will attempt to install the required Python modules.
 You can find the [requirements.txt](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/requirements.txt) file in this repository.
+This file contains the Python modules that need to be installed for the scripts.
 ```bash
 pip3 install -r requirements.txt
 ```
 
-You may need to install some system requiements before you are able to completely install these python modules.
+You may need to install some system requirements before you are able to finish installing these python modules.
 
 If you are using a MySQL database that's earlier than version 8 you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
+These are used to convert geometric data between coordinate systems, and other features as well.
 
-# Automated Steps
+# Direct Steps
 The steps here can be used to directly access ESRI schemas and data.
 
 ## Creating/Updating a Schema
 
 The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db.py) script is able to directly connect to ESRI and use the [Feature](https://support.esri.com/en-us/gis-dictionary/feature) schema to create and update the database.
+A detailed explanation of the options available with this script is (available).
 
 Open a command window and run the following command to see all the options available with this script
 ```bash
@@ -54,11 +57,18 @@ In this next example we specify both the host and database names within which th
 As before, you will be prompted to enter your database password and to provide the AGOL code after logging in to AGOL.
 
 ## Getting the data
+The [data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to populate the database.
+It can be used to download data directly from AGOL and update/populate the database.
+
+By default only new data is added to the database.
+If a primary key is specified on the command line it is used to determine if the data is already in the database.
+Otherwise all the columns are checked for a matching row and added to the database if a match isn't found.
 
 To see all the options available to this script, along with any default command line values, open a command window and run the following command.
 ```bash
 ./data_xfer_excel.py -h
 ```
+A detailed explanation of the options available with this script is (available).
 
 The following command adds new data to the database on the current machine.
 Data that already exists in the database is left alone.
@@ -95,6 +105,7 @@ Follow the following steps to get the schema JSON into a file
 
 ### Creating the Database Schema
 The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to create the database schema from the [Schema JSON](#getting-the-schema-json) file.
+A detailed explanation of the options available with this script is (available).
 
 Open a command window and run the following command to see all the options available with this script
 ```bash
@@ -153,6 +164,7 @@ To see all the options available to this script, along with any default command 
 ```bash
 ./data_xfer_excel.py -h
 ```
+A detailed explanation of the options available with this script is (available).
 
 The following command adds new data to the database on the current machine.
 Data that already exists in the database is left alone.

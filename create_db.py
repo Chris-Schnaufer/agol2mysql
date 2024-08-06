@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""This script will create or update the database using a Layer JSON file exported/copied from ESRI
+"""This script will create or update the database using a Layer JSON file exported/copied,
+or directly accessed, from ESRI
 """
 
 import os
