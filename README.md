@@ -81,7 +81,7 @@ You will be prompted to enter your database password and to provide the AGOL cod
 If the database is on another machine, you will need to specify the address of the host on the command line.
 In this next example we specify both the host and database names to where the new data will be added.
 ```bash
-# Replace remote-host, my-database, and data.xlxs with your values
+# Replace myusername, remote-host and my-database with your values
 ./data_xfer_excel.py -u myusername -p -o remote-host -d my-database
 ```
 As before, you will be prompted to enter your database password and to provide the AGOL code after logging in to AGOL.
@@ -139,7 +139,7 @@ In this final example we force the destructive recreation of the schema objects 
 
 ```bash
 # Dangerous command that will remove database data and objects matching the schema being created
-# Replace remote-host, my-database, and schema.json with the correct values
+# Replace myusername, remote-host, my-database, and schema.json with the correct values
 ./create_db.py -u myusername -p -o remote-host -d my-database --force schema.json
 ```
 
