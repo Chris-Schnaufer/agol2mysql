@@ -1,7 +1,6 @@
 /.idea/*
 *.xlsx
 *.accdb
-*.sql
 *.json
 Thumbs.*
 *.log
