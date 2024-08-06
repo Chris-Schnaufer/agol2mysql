@@ -3,6 +3,11 @@ This project has the scripts that can help you move your AGOL data to a MySQL da
 
 Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database and executing queries using SQL Workbench
 
+The scripts can be used in a less automated fasion (Manual) and a more automated fashion (Automated).
+The sections below reflect that diffence and are names as such.
+Follow the [Manual](#manual-steps) steps if you have ESRI schema JSON files and/or ESRI exported Excel files.
+The [Automated](#automated-steps) steps connect directly to ESRI and automatically fetches the schema and the data.
+
 # Prerequisites
 The scripts in this repository use Python3.10 or later.
 To check what Python version you have, open a console window and type the following command.
@@ -16,23 +21,79 @@ You can find the [requirements.txt](https://github.com/Chris-Schnaufer/agol2mysq
 pip3 install -r requirements.txt
 ```
 
+You may need to install some system requiements before you are able to completely install these python modules.
+
 If you are using a MySQL database that's earlier than version 8 you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
 
-# Creating/Recreating a Schema
+# Automated Steps
+The steps here can be used to directly access ESRI schemas and data.
+
+## Creating/Updating a Schema
+
+The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db.py) script is able to directly connect to ESRI and use the [Feature](https://support.esri.com/en-us/gis-dictionary/feature) schema to create and update the database.
+
+Open a command window and run the following command to see all the options available with this script
+```bash
+./create_db.py -h
+```
+
+The following command creates the schema in a database that is on the current machine.
+```bash
+# Replace myusername with your username
+./create_db.py -u myusername -p 
+```
+When running this script you will be prompted to enter your database password.
+You will also need to log into AGOL and use the code provided to give the script access to the schema data.
+
+If the database is on another machine, you will need to specify the address of the host on the command line.
+In this next example we specify both the host and database names within which the schema is created.
+```bash
+# Replace myusername, remote-host, and my-database with your values
+./create_db.py -u myusername -p -o remote-host -d my-database
+```
+As before, you will be prompted to enter your database password and to provide the AGOL code after logging in to AGOL.
+
+## Getting the data
+
+To see all the options available to this script, along with any default command line values, open a command window and run the following command.
+```bash
+./data_xfer_excel.py -h
+```
+
+The following command adds new data to the database on the current machine.
+Data that already exists in the database is left alone.
+```bash
+# 
+./data_xfer_excel.py -u myusername -p 
+```
+You will be prompted to enter your database password and to provide the AGOL code after logging in to AGOL.
+
+If the database is on another machine, you will need to specify the address of the host on the command line.
+In this next example we specify both the host and database names to where the new data will be added.
+```bash
+# Replace remote-host, my-database, and data.xlxs with your values
+./data_xfer_excel.py -u myusername -p -o remote-host -d my-database
+```
+As before, you will be prompted to enter your database password and to provide the AGOL code after logging in to AGOL.
+
+# Manual Steps
+Use the steps here if you want to use an ESRI JSON schema file and/or an ESRI-exported Excel spreadsheet data file.
+
+## Creating/Updating a Schema
 [AGOL](https://www.arcgis.com/index.html) provides JSON data that is used to create the MySQL database schema.
 It's necessary to have the JSON in a file provided to the script.
 
-## Getting the Schema JSON
+### Getting the Schema JSON
 Follow the following steps to get the schema JSON into a file
 1. First log onto your AGOL account and navigate to your Content - it should be a tab at the top of the page
 2. Click the **Title** to the left of the *Feature Layer* you want. There may be several entries with the same title, only one of them should be a *Feature Layer*
 3. On the new page, scroll down to find the **URL** label
 4. Click on the *View* button that's near the **URL** label. If there isn't a `View` button, open the URL in another tab by copying and pasting it
 5. On the new page there will be a `JSON` link on the left side, near the title. Click the `JSON` link to view the JSON
-6. Click once in the black box containing the JSON and select all the text. On Windows you can use \<CMD\>+A, on MacOS you can use \<COMMAND\>+A. Only the JSON text in the black box should be highlighted. If all the text on the page is highlighted, click in the black box and try again
+6. Click once in the black box containing the JSON and select all the text. On Windows you can use \<CMD\>+A, on MacOS you can use \<COMMAND\>+A. Only the JSON text in the black box should be highlighted. If all the text on the __page__ is highlighted, click in the black box and try again
 7. Copy the JSON from the web page and open your favorite text editor. Paste the JSON from the clipboard into the editor and save the JSON as a file
 
-## Creating the Database Schema
+### Creating the Database Schema
 The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to create the database schema from the [Schema JSON](#getting-the-schema-json) file.
 
 Open a command window and run the following command to see all the options available with this script
@@ -42,7 +103,7 @@ Open a command window and run the following command to see all the options avail
 
 The following command creates the schema in a database that is on the current machine.
 ```bash
-# Replace schema.json with the path and name of your JSON file
+# Replace myusername with your username and schema.json with the path of your JSON file
 ./create_db.py -u myusername -p schema.json
 ```
 When running this script you will be prompted to enter your database password.
@@ -50,12 +111,12 @@ When running this script you will be prompted to enter your database password.
 If the database is on another machine, you will need to specify the address of the host on the command line.
 In this next example we specify both the host and database names within which the schema is created.
 ```bash
-# Replace remote-host, my-database, and schema.json with your values
+# Replace myusername, remote-host, my-database, and schema.json with your values
 ./create_db.py -u myusername -p -o remote-host -d my-database schema.json
 ```
 As before, you will be prompted to enter your password.
 
-#### Notes on using the **--force** flag
+##### Notes on using the **--force** flag
 
 Always back up your database before using this flag!
 
@@ -71,17 +132,17 @@ In this final example we force the destructive recreation of the schema objects 
 ./create_db.py -u myusername -p -o remote-host -d my-database --force schema.json
 ```
 
-# Populating the Database
+## Populating the Database
 The database can be populated with the data stored on [AGOL](https://www.arcgis.com/index.html) after it's been downloaded as an Excel spreadsheet.
 
-## Downloading the Data
+### Downloading the Data
 The following steps can be used to download the data from AGOL
 1. First log onto your AGOL account and navigate to your Content - it should be a tab at the top of the page
 2. Click the **Title** to the left of the *Feature Layer* you want. There may be several entries with the same title, only one of them should be a *Feature Layer*
 3. On the right side of the new page, find the `Export Data` button (you can find it on the **Overview** page)
 4. Click the `Export Data` button and then click the *Export to Excel* option to begin downloading the data
 
-## Adding/Updating Data to the Database
+### Adding/Updating Data to the Database
 The [data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to populate the database using [data downloaded](#downloading-the-data) from AGOL as an Excel spreadheet.
 
 By default only new data is added to the database.
@@ -109,7 +170,7 @@ In this next example we specify both the host and database names to where the ne
 ```
 As before, you will be prompted to enter your password.
 
-#### Notes on the **--force** flag
+##### Notes on the **--force** flag
 
 Always back up your database before using this flag!
 
