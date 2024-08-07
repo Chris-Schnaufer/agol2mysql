@@ -27,6 +27,16 @@ You may need to install some system requirements before you are able to finish i
 If you are using a MySQL database that's earlier than version 8 you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
 These are used to convert geometric data between coordinate systems, and other features as well.
 
+# Scripts
+
+The following pPython scripts are used when loading ESRI data into the MySQL database.
+
+[create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db.py) creates or updates the database schema.
+More information on the script parameters are documented in [create_db_details.md](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db_details.md).
+
+[data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_xfer_excel.py) loads and updates data into the database.
+More information on this script's parameters can be found in [data_xfer_excel_details.md](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_xfer_excel_details.md).
+
 # Direct Steps
 The steps here can be used to directly access ESRI schemas and data.
 
