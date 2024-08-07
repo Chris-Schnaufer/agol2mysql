@@ -14,10 +14,10 @@ The user is prompted for the database password first, will then need to log onto
 ## Outputs
 Various information is displayed as the script runs.
 This information is also saved to the `create_db.log` file unless the log filename is changed (see [Parameters](#parameters) below).
-The amount of information displayed and saved is much greater when using the `--verbose` flag.
+The amount of information displayed and logged is much greater when using the `--verbose` flag.
 
 ## Parameters
-More information on each of the paramters follows the table below.
+More information on each of the paramters follows in the table below.
 
 Run the following command to see all the options with any default values.
 
@@ -75,7 +75,7 @@ The intent is to make it easy to keep using the same table name in the database 
 The format of this flag is `--map_name "<previous_name>=<new_name>`.
 The previous name will be used for the database and the new name is the AGOL name.
 
-The table name in the database can be changed to match the new name so that this flag isn't needed.
+The table name in the database can also be changed to match the new name so that this flag isn't needed.
 
 This flag can be specified multiple times, or none times, on the command line.
 
