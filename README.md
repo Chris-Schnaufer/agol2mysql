@@ -29,13 +29,17 @@ These are used to convert geometric data between coordinate systems, and other f
 
 # Scripts
 
-The following pPython scripts are used when loading ESRI data into the MySQL database.
+The following Python scripts are used when loading ESRI data into the MySQL database.
 
 [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db.py) creates or updates the database schema.
 More information on the script parameters are documented in [create_db_details.md](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db_details.md).
 
 [data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_xfer_excel.py) loads and updates data into the database.
 More information on this script's parameters can be found in [data_xfer_excel_details.md](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_xfer_excel_details.md).
+
+For loading legacy data the [populate_from_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_migration/populate_from_excel.py) python script is used.
+Caution must be used with this script so that legacy data doesn't overwrite the existing data that's in same-named tables.
+More information on this script it [TBD].
 
 # Direct Steps
 The steps here can be used to directly access ESRI schemas and data.

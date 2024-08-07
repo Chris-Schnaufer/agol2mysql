@@ -18,7 +18,7 @@ The amount of information displayed and logged is much greater when using the `-
 ## Parameters
 More information on each of the paramters follows in the table below.
 
-Run the following command to see all the options with any default values.
+Run the following command to see all the options along with any default values.
 
 ```bash
 ./data_xfer_excel.py -help
