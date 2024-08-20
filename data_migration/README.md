@@ -163,4 +163,6 @@ Sometimes there's also another step that prepares the database for the merge, su
 Also, some of the SQL commands use stored procedures.
 The SQL for creating, testing, and deleting the stored procedures are in the `.sql` files.
 
+Finally, pay close attention to the `objectid` column in the merge SQL; not all of the inserted records start at 1000000000.
+This is due to existing records in the table that are from other legacy sources.
 
