@@ -5,6 +5,8 @@ The data was migated from these databases by first exporting to Excel, then uplo
 
 The merged legacy records can be identified by their `objectid` values which start at 1000000000.
 
+**WARNING**: beware of tables in MySQL that have the same name as the data spreadsheets since it's easy to overwrite them.
+
 ## Excel Spreadsheet Requirements
 
 The Excel workbook needs at least two tabs, or spreadsheets.
@@ -146,3 +148,19 @@ There are three flags related to primary keys:
 - `--pk_force_text`: force the primary key to be text and not integer (its schema definition needs to be a text type)
 
 If `--no_primary` is specified on the command line along with one or more of the other primary key flags, it is ignored.
+
+## Merge with existing data
+
+Once the legacy data is uploaded into the database, it's time to merge it with the existing data.
+
+The [Data Migration SQL.xlsx](https://github.com/Chris-Schnaufer/agol2mysql/tree/main/data_migration) workbook contains the SQL used to merge the data.
+Each uploaded data table (spreadsheet) has its own spreadsheet with the SQL commands used in the merge, in the order they were run.
+For some of the data there are extra SQL commands used to rectify a situation; they're included as reference and follow the merge SQL.
+
+There are two main types of SQL commands: the ones that prepare the Survey123 table to accept the new data, and the merge SQL command.
+Sometimes there's also another step that prepares the database for the merge, such as creating unique GlobalID values for the uploaded data.
+
+Also, some of the SQL commands use stored procedures.
+The SQL for creating, testing, and deleting the stored procedures are in the `.sql` files.
+
+
