@@ -39,7 +39,7 @@ More information on this script's parameters can be found in [data_xfer_excel_de
 
 For loading legacy data the [populate_from_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_migration/populate_from_excel.py) python script is used.
 Caution must be used with this script so that legacy data doesn't overwrite the existing data that's in same-named tables.
-More information on this script it [TBD].
+More information on this script is available in the data_migration [README.md](https://github.com/Chris-Schnaufer/agol2mysql/tree/main/data_migration).
 
 # Direct Steps
 The steps here can be used to directly access ESRI schemas and data.
