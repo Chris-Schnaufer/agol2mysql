@@ -41,6 +41,8 @@ For loading legacy data the [populate_from_excel.py](https://github.com/Chris-Sc
 Caution must be used with this script so that legacy data doesn't overwrite the existing data that's in same-named tables.
 More information on this script is available in the data_migration [README.md](https://github.com/Chris-Schnaufer/agol2mysql/tree/main/data_migration).
 
+The script [a2database.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) is used by the other scripts to access the MySQL database and cannot be run on its own.
+
 # Direct Steps
 The steps here can be used to directly access ESRI schemas and data.
 
