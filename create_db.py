@@ -472,7 +472,7 @@ def get_geometry_columns(esri_geometry_type: str, geom_srid: int) -> Optional[tu
         A tuple of column definitions that represent the geometry type, or None
         for esriGeometryNull
     Exceptions:
-        Raises a TypeError if the geometery type is unknown
+        Raises a TypeError if the geometry type is unknown
     """
     col_type = None
 
