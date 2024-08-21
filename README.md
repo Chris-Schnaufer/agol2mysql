@@ -232,7 +232,7 @@ Replace all the values on the right side of the statement with your values.
 db_user <- 'your_name'
 db_password <- 'your_password'
 db_name <- 'database_name'
-db_host <- '127.0.0.1' # for local access
+db_host <- '127.0.0.1' # IP address of server
 db_port <- 3306
 ```
 
