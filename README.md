@@ -8,6 +8,8 @@ The sections below reflect that diffence and are names as such.
 The [Direct](#direct-steps) steps connect directly to ESRI and automatically fetches the schema and the data.
 Follow the [Manual](#manual-steps) steps if you have ESRI schema JSON files and/or ESRI exported Excel files.
 
+Finally an example of [connecting to the database](#connecting-to-the-database) using [R](https://www.r-project.org/about.html) is provided.
+
 # Prerequisites
 The scripts in this repository use Python3.10 or later.
 To check what Python version you have, open a console (or terminal) window and type the following command.
@@ -210,4 +212,53 @@ The database is running on the current machine.
 ```bash
 # Replace primary_key and data.xlxs with your primary key column name and file
 ./data_xfer_excel.py -u myusername -p --force --key_name primary_key data.xlxs
+```
+
+# Connecting to the Database
+A step-by-step example is given below using the [RMySQL](https://github.com/r-dbi/RMySQL) package.
+The RMySQL package is being replaced by the [RMariaDB](https://github.com/r-dbi/RMariaDB) package.
+More information on MariaDB can be found on their [website](https://mariadb.com/kb/en/rmariadb/).
+
+The first step is to make sure the correct library is loaded for accessing a MySQL database.
+```
+# Import the library
+library(RMySQL)
+```
+
+Next, provide connection and login information fo the database.
+Replace all the values on the right side of the statement with your values.
+```
+# The connection settings
+db_user <- 'your_name'
+db_password <- 'your_password'
+db_name <- 'database_name'
+db_host <- '127.0.0.1' # for local access
+db_port <- 3306
+```
+
+Connect to the database.
+```
+# Connect to the database
+mydb <-  dbConnect(MySQL(), user = db_user, password = db_password,
+                 dbname = db_name, host = db_host, port = db_port)
+```
+
+Run a query to obtain data from the database.
+```
+# Run a query
+db_table <- 'your_data_table'
+s <- paste0("select * from ", db_table)
+rs <- dbSendQuery(mydb, s)
+```
+
+Fetch the data from the database.
+```
+# Fetch the data
+df <-  fetch(rs, n = -1)
+```
+
+Optionally, disconnect from the database on exit.
+You can also manually disconnect from the database
+```
+on.exit(dbDisconnect(mydb))
 ```
