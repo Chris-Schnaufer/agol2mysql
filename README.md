@@ -1,21 +1,34 @@
 # About
-This project has the scripts that can help you move your AGOL data to a MySQL database.
+This project has the scripts that can help you move your AGOL ([ArcGIS Online](https://www.arcgis.com/index.html)) data to a MySQL database.
 
-Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database with SQL Workbenchand executing queries.
+Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database with SQL Workbench and executing queries.
 
 The scripts can be used in a less automated fasion (Manual) and a more automated fashion (Direct).
 The sections below reflect that diffence and are names as such.
 The [Direct](#direct-steps) steps connect directly to ESRI and automatically fetches the schema and the data.
 Follow the [Manual](#manual-steps) steps if you have ESRI schema JSON files and/or ESRI exported Excel files.
 
-Finally an example of [connecting to the database](#connecting-to-the-database) using [R](https://www.r-project.org/about.html) is provided.
+There are also [Example Situations](#example_situations) documented for common scenarios.
+For uncommon scenarios, and for certain documented scenarios, manual intervention with the MySQL database may be required.
+
+Finally, an example of [connecting to the database](#connecting-to-the-database) using [R](https://www.r-project.org/about.html) is provided.
 
 # Prerequisites
+
+### Python
+[Python](https://www.python.org/) is a widely used programming language that has many applications.
+The scripts in this repository use Python to access AGOL, retreive data stored there, and use the data to change/update a MySQL database.
+
 The scripts in this repository use Python3.10 or later.
 To check what Python version you have, open a console (or terminal) window and type the following command.
 ```bash
 python3 --version
 ```
+
+If Python is not installed on your system, or if you need to upgrade your version of Python, it's available for [download](https://www.python.org/downloads/).
+Generally, the latest release is the only one which has installers that can be downloaded and run.
+Some operating systems, such as **Ubuntu 24.04.1 LTS**, have their own mechanisms for installing and updating Python that can be used instead of a downloads.
+
 To ensure you have all the needed Python modules installed you can run the [pip3](https://pip.pypa.io/en/stable/) command.
 The following command will attempt to install the required Python modules.
 You can find the [requirements.txt](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/requirements.txt) file in this repository.
@@ -31,12 +44,12 @@ These are used to convert geometric data between coordinate systems, and other f
 
 # AGOL Setup
 
-AGOL ([ArcGIS Online](https://www.arcgis.com/index.html)) has security features that can be used to restrict and permit users from one account to access the data from another account.
+AGOL has security features that can be used to restrict and permit users from one account to access the data from another account.
 When using the scripts to access data where permission has been granted, an application needs to be created on AGOL.
 It's through this application that the scripts are able to access the data.
 The application won't be needed if the account used with the scripts is the owner of the data.
 
-## Creating an AGOL Application
+### Creating an AGOL Application
 Select the **Content** tab after logging into AGOL with a browser.
 
 1. Click the *New Item* button to start creating an application that allows the scripts to access data
@@ -231,6 +244,103 @@ The database is running on the current machine.
 # Replace primary_key and data.xlxs with your primary key column name and file
 ./data_xfer_excel.py -u myusername -p --force --key_name primary_key data.xlxs
 ```
+
+# Example Situations
+
+### Survey name changes
+There are times when you might want to save an updated survey under a new name.
+The scripts that create the schema in the MySQL database use the Survey Name as part of the main table (it's encoded in the JSON fetched from AGOL).
+When the data gets pulled down from the updated survey under the new name, there's a mismatch since the name has changed.
+
+By specifying the `--map_name` (or the `-m` equivelent) switch on the command line it's possible to map the new ESRI name to the old MySQL name.
+```bash
+# Example for mapping a new ESRI table name to an old one in MySQL
+# This example maps the new table new 'MySurvey New' to 'MySurvey'
+./data_xfer_excel.py -m "MySurvey New=MySurvey" -u myusername -p -o remote-host -d my-database
+```
+When the scripts encounter the new name, it will be mapped to the old name and the old name will be used for the database operations.
+The `--map_name` flag can be specified multiple times on the command line to map other table names.
+
+NOTE: it's also possible to change the name of the table in the MySQL data.
+This may be a good option if the impact of changing the MySQL table name is acceptable.
+For example, is it easy to change SQL commands?.
+
+### Changed data
+Sometimes it's necessary to change the data that's stored on AGOL.
+These changes then need to be reflected in the MySQL database.
+
+Once solution is to manually change the MySQL database.
+With the right tool, such as [dbeaver](https://dbeaver.io/) or [MySQL Workbench](https://www.mysql.com/products/workbench/), this might be easy to do.
+
+The `data_xfer_excel.py` script is also able to update the data in the database, meaning you only need to change it in AGOL and run the script.
+The MySQL database will be updated with the changes made.
+
+By default tables are only updated with new records.
+A check against the primary key is made to see if a record already exists in the MySQL database, and the row is added if the key is not found.
+If a row with the primary key is found, that row is left unchanged.
+
+When the `--force` flag is specified and a row with the primary key is found, an additional check is made to see if the data has changed.
+If the data has changed, the row is updated.
+New rows are added to the table as is usual.
+
+```bash
+# Example of forcing updates to existing rows that've changed (any new rows will be added)
+./data_xfer_excel.py --force -u myusername -p -o remote-host -d my-database
+```
+
+### Deleting MySQL rows
+There may be occasions when a row in AGOL needs to be deleted.
+In these cases, it's necessary to manually delete the row from the MySQL database.
+
+A decision was made to not include this functionality in the scripts since data deletion is destructive and automating this could result in permenantly lost data.
+For example, if the wrong row in AGOL is deleted, the data could be recovered from the MySQL database.
+Likewise, if the wrong row in MySQL is deleted, the next `data_xfer_excel.py` run will update the MySQL database from AGOL and the data restored.
+
+### Adding, modifying, and deleting Survey123 fields
+The `create_db.py` script is resonsible for managing the MySQL database's schema (within certain limits).
+
+The Survey123 editor is a dynamic application and allows the easy addition, modification and deletion of survey fields.
+The `create_db.py` script can update the MySQL database in certain circumstances.
+
+The main goal of the script is to protect the integrity of the database schema and data.
+When something occurs that the script determines is outside of its scope, it will report the issue and may stop running.
+When this happens, command line flags may be able to work around the issue (be careful!), or manual intervention in the MySQL database might be required.
+
+##### Adding
+New columns are automatically added to tables.
+This means that as surveys mature, new tables and columns can be easily added to the MySQL database by running the script.
+
+##### Modification
+If the underlying data type of a field is unchanged, the Survey123 changes may be transparent to the database.
+
+For example, changing a free form text field to a dropdown selection field most likely wouldn't require a change to the MySQL database.
+
+A change from a text to an integer type is a more significant change and may require a manual intervention in the database.
+This is because the existing MySQL data might not be compatible with an integer type.
+
+When the underlying data type changes, a manual update to the database schema and associated data may be needed.
+
+##### Deletion
+When a field in Survey123 is deleted, it's considered an error by the `create_db.py` script unless the `--ignore_missing_cols` flag is specified on the command line.
+This flag allows legacy data to be kept around while allowing the schema to be protected.
+
+If it is desirable to remove the column, it needs to be manually deleted from the table in the database.
+
+##### Changing a field name
+It's possible to change a field's name in Survey123.
+This has a direct impact on the the name the data is saved under in both Survey123 and the MySQL database (as the column name).
+
+The `data_xfer_excel.py` script can handle this by specifying the `--col_name_map` flag.
+Similarly to mapping table names, this flag maps an new AGOL name to the older MySQL column name.
+
+```bash
+# Example mapping an AGOL column name to its MySQL name
+./data_xfer_excel.py --col_name_map "New field name=MySQL_column_name" -u myusername -p -o remote-host -d my-database
+```
+
+Another option is to manually modify the MySQL database to update the column name.
+Note that AGOL field names are transformed to a database-compatible name when necessary.
+Spaces are converted to underscores(\_) and special characters are converted to periods (.).
 
 # Connecting to the Database
 A step-by-step example is given below using the [RMySQL](https://github.com/r-dbi/RMySQL) package.
