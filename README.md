@@ -29,6 +29,24 @@ You may need to install some system requirements before you are able to finish i
 If you are using a MySQL database that's earlier than version 8 you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
 These are used to convert geometric data between coordinate systems, and other features as well.
 
+# AGOL Setup
+
+AGOL ([ArcGIS Online](https://www.arcgis.com/index.html)) has security features that can be used to restrict and permit users from one account to access the data from another account.
+When using the scripts to access data where permission has been granted, an application needs to be created on AGOL.
+It's through this application that the scripts are able to access the data.
+The application won't be needed if the account used with the scripts is the owner of the data.
+
+## Creating an AGOL Application
+Select the **Content** tab after logging into AGOL with a browser.
+
+1. Click the *New Item* button to start creating an application that allows the scripts to access data
+2. Click the *Application* button to open the Application type window
+3. Select the *Other Application* option and click the **Next** button
+4. Fill in the form's fields as directed, including a meaningful title and click the **Save** button
+
+After the application is created you will be directed to a page where information on the application is shown, including the *Client ID*.
+This *Client ID* is used by the scripts to access the data.
+
 # Scripts
 
 The following Python scripts are used when loading ESRI data into the MySQL database.
