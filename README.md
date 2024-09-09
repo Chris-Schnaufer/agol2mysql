@@ -1,7 +1,7 @@
 # About
 This project has the scripts that can help you move your AGOL ([ArcGIS Online](https://www.arcgis.com/index.html)) data to a MySQL database.
 
-Refer to the [Starting document](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/STARTING_OUT.md) for information on connecting to the database with SQL Workbench and executing queries.
+Refer to the [Starting document](STARTING_OUT.md) for information on connecting to the database with SQL Workbench and executing queries.
 
 The scripts can be used in a less automated fasion (Manual) and a more automated fashion (Direct).
 The sections below reflect that diffence and are names as such.
@@ -31,7 +31,7 @@ Some operating systems, such as **Ubuntu 24.04.1 LTS**, have their own mechanism
 
 To ensure you have all the needed Python modules installed you can run the [pip3](https://pip.pypa.io/en/stable/) command.
 The following command will attempt to install the required Python modules.
-You can find the [requirements.txt](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/requirements.txt) file in this repository.
+You can find the [requirements.txt](requirements.txt) file in this repository.
 This file contains the Python modules that need to be installed for the scripts.
 ```bash
 pip3 install -r requirements.txt
@@ -41,6 +41,7 @@ You may need to install some system requirements before you are able to finish i
 
 If you are using a MySQL database that's earlier than version 8 you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
 These are used to convert geometric data between coordinate systems, and other features as well.
+Note that installing GDAL can be difficult and complicated.
 
 # AGOL Setup
 
@@ -64,25 +65,25 @@ This *Client ID* is used by the scripts to access the data.
 
 The following Python scripts are used when loading ESRI data into the MySQL database.
 
-[create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db.py) creates or updates the database schema.
-More information on the script parameters are documented in [create_db_details.md](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db_details.md).
+[create_db.py](create_db.py) creates or updates the database schema.
+More information on the script parameters are documented in [create_db_details.md](create_db_details.md).
 
-[data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_xfer_excel.py) loads and updates data into the database.
-More information on this script's parameters can be found in [data_xfer_excel_details.md](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_xfer_excel_details.md).
+[data_xfer_excel.py](data_xfer_excel.py) loads and updates data into the database.
+More information on this script's parameters can be found in [data_xfer_excel_details.md](data_xfer_excel_details.md).
 
-For loading legacy data the [populate_from_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/data_migration/populate_from_excel.py) python script is used.
+For loading legacy data the [populate_from_excel.py](populate_from_excel.py) python script is used.
 Caution must be used with this script so that legacy data doesn't overwrite the existing data that's in same-named tables.
-More information on this script is available in the data_migration [README.md](https://github.com/Chris-Schnaufer/agol2mysql/tree/main/data_migration).
+More information on this script is available in the data_migration [README.md](data_migration).
 
-The script [a2database.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) is used by the other scripts to access the MySQL database and cannot be run on its own.
+The script [a2database.py](a2database.py) is used by the other scripts to access the MySQL database and cannot be run on its own.
 
 # Direct Steps
 The steps here can be used to directly access ESRI schemas and data.
 
 ## Creating/Updating a Schema
 
-The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/blob/main/create_db.py) script is able to directly connect to ESRI and use the [Feature](https://support.esri.com/en-us/gis-dictionary/feature) schema to create and update the database.
-A detailed explanation of the options available with this script is (available).
+The [create_db.py](create_db.py) script is able to directly connect to ESRI and use the [Feature](https://support.esri.com/en-us/gis-dictionary/feature) schema to create and update the database.
+A detailed explanation of the options available with this script is [available](create_db_details.md).
 
 Open a command window and run the following command to see all the options available with this script
 ```bash
@@ -106,7 +107,7 @@ In this next example we specify both the host and database names within which th
 As before, you will be prompted to enter your database password and to provide the AGOL code after logging in to AGOL.
 
 ## Getting the data
-The [data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to populate the database.
+The [data_xfer_excel.py](data_xfer_excel.py) script is used to populate the database.
 It can be used to download data directly from AGOL and update/populate the database.
 
 By default only new data is added to the database.
@@ -117,7 +118,7 @@ To see all the options available to this script, along with any default command 
 ```bash
 ./data_xfer_excel.py -h
 ```
-A detailed explanation of the options available with this script is (available).
+A detailed explanation of the options available with this script is [available](data_xfer_excel_details.md).
 
 The following command adds new data to the database on the current machine.
 Data that already exists in the database is left alone.
@@ -153,8 +154,8 @@ Follow the following steps to get the schema JSON into a file
 7. Copy the JSON from the web page and open your favorite text editor. Paste the JSON from the clipboard into the editor and save the JSON as a file
 
 ### Creating the Database Schema
-The [create_db.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to create the database schema from the [Schema JSON](#getting-the-schema-json) file.
-A detailed explanation of the options available with this script is (available).
+The [create_db.py](create_db.py) script is used to create the database schema from the [Schema JSON](#getting-the-schema-json) file.
+A detailed explanation of the options available with this script is [available](create_db_details.md).
 
 Open a command window and run the following command to see all the options available with this script
 ```bash
@@ -203,7 +204,7 @@ The following steps can be used to download the data from AGOL
 4. Click the `Export Data` button and then click the *Export to Excel* option to begin downloading the data
 
 ### Adding/Updating Data to the Database
-The [data_xfer_excel.py](https://github.com/Chris-Schnaufer/agol2mysql/tree/main) script is used to populate the database using [data downloaded](#downloading-the-data) from AGOL as an Excel spreadheet.
+The [data_xfer_excel.py](data_xfer_excel.py) script is used to populate the database using [data downloaded](#downloading-the-data) from AGOL as an Excel spreadheet.
 
 By default only new data is added to the database.
 If a primary key is specified on the command line it is used to determine if the data is already in the database.
@@ -213,7 +214,7 @@ To see all the options available to this script, along with any default command 
 ```bash
 ./data_xfer_excel.py -h
 ```
-A detailed explanation of the options available with this script is (available).
+A detailed explanation of the options available with this script is [available](data_xfer_excel_details.md).
 
 The following command adds new data to the database on the current machine.
 Data that already exists in the database is left alone.
@@ -306,11 +307,11 @@ The main goal of the script is to protect the integrity of the database schema a
 When something occurs that the script determines is outside of its scope, it will report the issue and may stop running.
 When this happens, command line flags may be able to work around the issue (be careful!), or manual intervention in the MySQL database might be required.
 
-##### Adding
+#### Adding
 New columns are automatically added to tables.
 This means that as surveys mature, new tables and columns can be easily added to the MySQL database by running the script.
 
-##### Modification
+#### Modification
 If the underlying data type of a field is unchanged, the Survey123 changes may be transparent to the database.
 
 For example, changing a free form text field to a dropdown selection field most likely wouldn't require a change to the MySQL database.
@@ -320,13 +321,13 @@ This is because the existing MySQL data might not be compatible with an integer 
 
 When the underlying data type changes, a manual update to the database schema and associated data may be needed.
 
-##### Deletion
+#### Deletion
 When a field in Survey123 is deleted, it's considered an error by the `create_db.py` script unless the `--ignore_missing_cols` flag is specified on the command line.
 This flag allows legacy data to be kept around while allowing the schema to be protected.
 
 If it is desirable to remove the column, it needs to be manually deleted from the table in the database.
 
-##### Changing a field name
+#### Changing a field name
 It's possible to change a field's name in Survey123.
 This has a direct impact on the the name the data is saved under in both Survey123 and the MySQL database (as the column name).
 
