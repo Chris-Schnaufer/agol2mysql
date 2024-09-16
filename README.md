@@ -13,6 +13,8 @@ For uncommon scenarios, and for certain documented scenarios, manual interventio
 
 Finally, an example of [connecting to the database](#connecting-to-the-database) using [R](https://www.r-project.org/about.html) is provided.
 
+Support inforrmation can be found on [Google Drive](https://docs.google.com/document/d/11V0e99n5_L4HjAJUwkyvUcDpMk17nP9eGEfhQYizxcA/edit?usp=sharing).
+
 # Prerequisites
 
 ### Python
