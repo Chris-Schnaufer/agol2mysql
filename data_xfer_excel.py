@@ -670,55 +670,56 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
     # Get the feature layer
     feature_layer = None
     if len(search_res) > 0:
-        feature_layer = search_res.layers[0]
+        if len(search_res.layers) > 0:
+            feature_layer = search_res.layers[0]
     else:
         raise ValueError('Unable to access item with ID {feature_id} at {endpoint_url}')
 
-    # Process feature and table data
     skipped_rows = 0
     added_updated_rows = 0
 
-    # Get the table name
-    table_name = feature_layer.properties['name']
-    opts['logger'].info(f'Processing ESRI table {table_name}')
-    if 'table_name_map' in opts and opts['table_name_map'] and table_name in opts['table_name_map']:
-        table_name = opts['table_name_map'][table_name]
-        opts['logger'].info(f'    table name mapped for database: {table_name}')
+    # Process feature and table data
+    if feature_layer:
+        # Get the table name
+        table_name = feature_layer.properties['name']
+        opts['logger'].info(f'Processing ESRI table {table_name}')
+        if 'table_name_map' in opts and opts['table_name_map'] and table_name in opts['table_name_map']:
+            table_name = opts['table_name_map'][table_name]
+            opts['logger'].info(f'    table name mapped for database: {table_name}')
 
-    # Check if we're resetting the tables
-    saved_constraints = None
-    if 'reset' in opts and opts['reset']:
-        saved_constraints = db_get_fk_constraints(conn, table_name, opts['logger'], verbose)
-        db_remove_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
-        query = f'TRUNCATE TABLE {table_name}'
-        if verbose:
-            opts['logger'].info(query)
-        conn.execute(query)
-        conn.reset()
+        # Check if we're resetting the tables
+        saved_constraints = None
+        if 'reset' in opts and opts['reset']:
+            saved_constraints = db_get_fk_constraints(conn, table_name, opts['logger'], verbose)
+            db_remove_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
+            query = f'TRUNCATE TABLE {table_name}'
+            if verbose:
+                opts['logger'].info(query)
+            conn.execute(query)
+            conn.reset()
 
-    # Get date indexes
-    date_indexes = []
-    for field_idx, one_field in enumerate(feature_layer.properties['fields']):
-        if one_field['type'] == 'esriFieldTypeDate':
-            date_indexes.append(field_idx)
+        # Get date indexes
+        date_indexes = []
+        for field_idx, one_field in enumerate(feature_layer.properties['fields']):
+            if one_field['type'] == 'esriFieldTypeDate':
+                date_indexes.append(field_idx)
 
-    # Process feature data
-    for one_res in feature_layer.query('OBJECTId >= 0'):
-        values, names = one_res.as_row
-        names = tuple(map_col_name((table_name,), one_name, opts['col_name_map']) \
-                                                                    for one_name in names)
-        if date_indexes:
-            values = tuple(values)
-            values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
-                            date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
-        if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
-            added_updated_rows = added_updated_rows + 1
-        else:
-            skipped_rows = skipped_rows + 1
+        # Process feature data
+        for one_res in feature_layer.query('OBJECTId >= 0'):
+            values, names = one_res.as_row
+            names = tuple(map_col_name((table_name,), one_name, opts['col_name_map']) \
+                                                                        for one_name in names)
+            if date_indexes:
+                values = tuple(values)
+                values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
+                                date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
+            if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
+                added_updated_rows = added_updated_rows + 1
+            else:
+                skipped_rows = skipped_rows + 1
 
-    if saved_constraints:
-        db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
-
+        if saved_constraints:
+            db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
 
     # Process data from each of the tables
     for one_table in search_res.tables:

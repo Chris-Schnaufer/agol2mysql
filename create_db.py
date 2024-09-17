@@ -966,13 +966,15 @@ def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
     # Get the feature layer
     feature_layer = None
     if len(search_res) > 0:
-        feature_layer = search_res.layers[0]
+        if len(search_res.layers) > 0:
+            feature_layer = search_res.layers[0]
     else:
         raise ValueError('Unable to access item with ID {featureid} at {endpoint_url}')
 
     # Start accumulating the table structure as JSON
     cur_json = {"layers": [], "tables": []}
-    cur_json["tables"].append(json.loads(str(feature_layer.properties)))
+    if feature_layer:
+        cur_json["tables"].append(json.loads(str(feature_layer.properties)))
 
     for one_table in search_res.tables:
         cur_json["tables"].append(json.loads(str(one_table.properties)))
