@@ -21,6 +21,9 @@ Support inforrmation can be found on [Google Drive](https://docs.google.com/docu
 [Python](https://www.python.org/) is a widely used programming language that has many applications.
 The scripts in this repository use Python to access AGOL, retrieve data stored there, and use the data to change/update a MySQL database.
 
+Note that the `arcgis` package might not use the latest version of Python.
+At the time this README was written, Python 3.11 was the latest version ESRI supported.
+
 The scripts in this repository use Python3.10 or later.
 To check what Python version you have, open a console (or terminal) window and type the following command.
 ```bash
@@ -43,7 +46,10 @@ If you don't have `pip3` on your system, you will have to install it.
 
 You may also need to install some system requirements before you are able to finish installing these python modules.
 
-If you are using a MySQL database that's earlier than version 8 you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
+If you are experiencing problem when the `arcgis` module is being installed, check your Python version number against what this module supports.
+It's possible that your Python version is too new (or too old) for the module.
+
+If you are using a MySQL database that's **earlier than version 8** you will also need to install [GDAL](https://gdal.org/download.html) and [pygdal](https://pypi.org/project/pygdal/).
 These are used to convert geometric data between coordinate systems, and other features as well.
 Note that installing GDAL can be difficult and complicated.
 
