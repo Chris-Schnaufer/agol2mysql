@@ -68,10 +68,10 @@ WARNING: using this flag can cause data to be lost forever! Back up your data be
 Forces the update of the data in the database.
 By default, only new records are added to the database tables.
 
-When changes are made to the AGOL data, specifying the `--force` flag will cause an additional check to be made against the databasse.
-If that check shows that the AGOL data is newer, the database entry will be updated.
+When changes are made to the AGOL data, specifying the `--force` flag will cause an additional check to be made against the database.
+If the check shows that the AGOL data is newer, the asssociated database entry will be updated.
 
-As when this flag isn't specified, all new records that are found will be added.
+All new records that are found will be added to the database.
 
 ##### key_name flag
 Specifies the name of the database primary key column in the spreadsheet.
