@@ -65,14 +65,13 @@ This flag can be specified multiple times, or none times, on the command line.
 ##### force flag
 WARNING: using this flag can cause data to be lost forever! Back up your data before using this flag.
 
-Forces a change to the database schema; tables and associated schema elements are deleted and recreated
+Forces the update of the data in the database.
+By default, only new records are added to the database tables.
 
-The force flag will cause the schema to be recreated in the database.
-Only database schema objects that are defined in the JSON file, or pulled down from AGOL, are impacted.
+When changes are made to the AGOL data, specifying the `--force` flag will cause an additional check to be made against the databasse.
+If that check shows that the AGOL data is newer, the database entry will be updated.
 
-All relevant tables, indexes, foreign key constraints, and data are deleted.
-Any database objects that reference these items may need to be restored, or may work differently.
-This includes triggers, functions, and stored procedures.
+As when this flag isn't specified, all new records that are found will be added.
 
 ##### key_name flag
 Specifies the name of the database primary key column in the spreadsheet.
