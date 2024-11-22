@@ -448,8 +448,12 @@ class A2Database:
                 geom_col = col_name
                 geom_type = col_type_str
             # Check for an alias and strip it out of the comment
-            if col_comment and col_comment.startswith('ALIAS:'):
-                alias_name = col_comment.split('[')[1].split(']')[0]
+            if isinstance(col_comment, bytes) or isinstance(col_comment, bytearray):
+                col_comment_str = col_comment.decode("utf-8").upper()
+            else:
+                col_comment_str = col_comment
+            if col_comment_str and col_comment_str.startswith('ALIAS:'):
+                alias_name = col_comment_str.split('[')[1].split(']')[0]
                 col_aliases[alias_name] = col_name
 
         if not geom_col:
