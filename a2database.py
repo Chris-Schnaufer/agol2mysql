@@ -432,7 +432,7 @@ class A2Database:
                            ]
 
         query = 'SELECT column_name,column_type,column_comment FROM INFORMATION_SCHEMA.COLUMNS ' \
-                'WHERE table_schema = %s  AND table_name=%s'
+                'WHERE table_schema = %s AND table_name=%s'
         self._cursor.execute(query, (self._conn.database, table_name))
 
         # Try and find a geometry column while collecting comments with aliases
@@ -479,9 +479,13 @@ class A2Database:
                                    'sheet_cols': (point_col_x, point_col_y)
                                   }
                 else:
-                    raise ValueError(f'Expected point column names "{point_col_x}" and ' \
-                                     f'"{point_col_y}" not found in specified column names: ', \
-                                     col_names)
+                    return_info = {'table_column': geom_col,
+                                   'col_sql': f'ST_Srid(Point(0.0, 0.0), {self._epsg})',
+                                   'sheet_cols': ()
+                                  }
+#                    raise ValueError(f'Expected point column names "{point_col_x}" and ' \
+#                                     f'"{point_col_y}" not found in specified column names: ', \
+#                                     col_names)
             # Add other cases here
             case _:
                 raise NotImplementedError(f'Unsupported geometry type {geom_type} specified')
@@ -986,9 +990,12 @@ class A2Database:
             query_cols = col_names
             query_types = list(('%s' for one_name in query_cols))
             query_values = list(col_values)
+            self._logger.info('HACK: NO GEOMETRY')
 
         # Check for alias on a column name
-        query_cols = list((one_name if not one_name in col_alias else col_alias[one_name] \
+        if col_alias:
+            self._logger.info(f'HACK: ALIAS: {query_cols} {col_alias}')
+            query_cols = list((one_name if not one_name in col_alias else col_alias[one_name] \
                                                                         for one_name in query_cols))
 
         # Generate the SQL

@@ -545,7 +545,7 @@ def get_geometry_columns(esri_geometry_type: str, geom_srid: int) -> Optional[tu
             'srid': geom_srid,
             'default': None,
             'foreign_key': None,
-            'null_allowed': False,
+            'null_allowed': True,
             'primary': False
             }
             ,)

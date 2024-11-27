@@ -599,6 +599,7 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
     values = list(col_values)
     geom_col_info = None
     col_alias = None
+    epsg = None
 
     # Get the X and Y field names
     if 'SHAPE@' in names:
@@ -615,8 +616,18 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
         values.pop(shape_index)
 
     # Find geometry columns
-    geom_col_info, col_alias = conn.get_col_info(table_name, names, opts['geometry_epsg'],
+    geom_col_info, col_alias = (None, {})
+    try:
+        geom_col_info, col_alias = conn.get_col_info(table_name, names, opts['geometry_epsg'],
                                             colX1=opts['point_col_x'], rowY1=opts['point_col_y'])
+    except ValueError as ex:
+        if verbose:
+            opts['logger'].warning('Geometry Info', exc_info=True, stack_info=True)
+        if not opts['force']:
+            opts['logger'].warning('Table geometries are different. Specify --force to ignore this issue')
+            raise ex
+        else:
+            opts['logger'].warning('Table geometries are different. Continuing with processing')
 
     # Skip over missing primary keys
     pk_value = values[names.index(opts['primary_key'])]
@@ -637,8 +648,10 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
             return False
 
     # Adding in the data
-    if geom_col_info and conn.epsg != epsg:
+    if geom_col_info and epsg and conn.epsg != epsg:
         values = transform_geom_cols(names, values, geom_col_info, epsg, conn.epsg)
+    opts['logger'].info(f'HACK: ROW: {col_names} {col_values}')
+    opts['logger'].info(f'HACK: ROW: {names} {values} {geom_col_info}')
     conn.add_update_data(table_name, names, values, col_alias, geom_col_info, \
                          update=data_exists, \
                          primary_key=opts['primary_key'],
@@ -713,10 +726,16 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
                 values = tuple(values)
                 values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
                                 date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
-            if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
-                added_updated_rows = added_updated_rows + 1
-            else:
-                skipped_rows = skipped_rows + 1
+            try:
+                if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
+                    added_updated_rows = added_updated_rows + 1
+                else:
+                    skipped_rows = skipped_rows + 1
+            except ValueError as ex:
+                # Prepare for an error return
+                if saved_constraints:
+                    db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
+                raise ex
 
         if saved_constraints:
             db_restore_fk_constraints(conn, saved_constraints, opts['logger'], verbose)
@@ -777,6 +796,8 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         filepath: the path to the file to load
         opts: additional options
     """
+    verbose = 'verbose' in opts and opts['verbose']
+
     required_opts = ('host', 'database', 'password', 'user')
 
     # Check the opts parameter
@@ -817,8 +838,16 @@ def load_excel_file(filepath: str, opts: dict) -> None:
         for one_sheet in workbook.worksheets:
             process_sheet(one_sheet, db_conn, opts)
     else:
-        process_esri_data(db_conn, opts['esri_endpoint'], opts['esri_client_id'],
-                            opts['esri_feature_id'], opts)
+        try:
+            process_esri_data(db_conn, opts['esri_endpoint'], opts['esri_client_id'],
+                                opts['esri_feature_id'], opts)
+        except ValueError as ex:
+            if verbose:
+                logging.getLogger().error('Value exception caught', exc_info=True, stack_info=True)
+                user_opts['logger'].error('Stopping processing due to detected problem')
+            else:
+                user_opts['logger'].error('Stopping processing due to detected problem. Use the ' \
+                                                            '--verbose flag for more information')
 
     db_conn.commit()
 
