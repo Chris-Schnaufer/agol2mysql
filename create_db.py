@@ -357,7 +357,7 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
 
     # Check the unique field ID
     if unique_field_id is None:
-        unique_field_id = 'objectid'
+        unique_field_id = 'globalid'
 
     # Generate the column information
     col_name = A2Database.sqlstr(col['name'])
@@ -378,6 +378,8 @@ def get_column_info(col: dict, unique_field_id: str, table_id: int, dest_rels: t
 
         case 'esriFieldTypeGlobalID' | 'esriFieldTypeGUID':
             col_type = 'char(36)'
+            if not is_primary and col['name'] == unique_field_id:
+                is_primary = True
 
         case 'esriFieldTypeInteger':
             col_type = 'INT'
@@ -545,7 +547,7 @@ def get_geometry_columns(esri_geometry_type: str, geom_srid: int) -> Optional[tu
             'srid': geom_srid,
             'default': None,
             'foreign_key': None,
-            'null_allowed': True,
+            'null_allowed': False,
             'primary': False
             }
             ,)
@@ -581,7 +583,7 @@ def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple,
             'table': table_name,
             'column_names': list(index_fields),
             'ascending': one_index['isAscending'],
-            'unique': one_index['isUnique'],
+            'unique': one_index['isUnique'] and (len(index_fields) != 1 or not 'objectid' in index_fields),
             'description': f'({one_index["name"]}) {one_index["description"]}'
             })
 
@@ -625,7 +627,7 @@ def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> d
     columns = []
     indexes = []
     values = []
-    unique_field_id = 'objectid'
+    unique_field_id = 'globalid'
 
     # Check for a name map
     table_name = esri_schema['name'] if not 'table_name_map' in opts \
@@ -638,7 +640,8 @@ def process_layer_table(esri_schema: dict, relationships: list, opts: dict) -> d
     if 'uniqueIdField' in esri_schema:
         if isinstance(esri_schema['uniqueIdField'], dict) and \
                 'name' in esri_schema['uniqueIdField']:
-            unique_field_id = A2Database.sqlstr(esri_schema['uniqueIdField']['name'])
+            if esri_schema['uniqueIdField']['name'].lower() != 'objectid':
+                unique_field_id = A2Database.sqlstr(esri_schema['uniqueIdField']['name'])
         else:
             msg = f'Unsupported "uniqueIdField" type found for {table_name} (expected object)'
             raise TypeError(msg)

@@ -40,7 +40,7 @@ DEFAULT_NUM_HEADER_LINES = 1
 DEFAULT_COL_NAMES_ROW = 1
 
 # The default primary key database name for the sheet data
-DEFAULT_PRIMARY_KEY_NAME = 'ObjectID'
+DEFAULT_PRIMARY_KEY_NAME = 'globalid'
 
 # Default EPSG code for points
 DEFAULT_GEOM_EPSG = 4326
@@ -650,8 +650,6 @@ def process_esri_row(conn: A2Database, table_name: str, col_names: tuple, col_va
     # Adding in the data
     if geom_col_info and epsg and conn.epsg != epsg:
         values = transform_geom_cols(names, values, geom_col_info, epsg, conn.epsg)
-    opts['logger'].info(f'HACK: ROW: {col_names} {col_values}')
-    opts['logger'].info(f'HACK: ROW: {names} {values} {geom_col_info}')
     conn.add_update_data(table_name, names, values, col_alias, geom_col_info, \
                          update=data_exists, \
                          primary_key=opts['primary_key'],
@@ -718,7 +716,7 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
                 date_indexes.append(field_idx)
 
         # Process feature data
-        for one_res in feature_layer.query('OBJECTId >= 0'):
+        for one_res in feature_layer.query('OBJECTID >= 0'):
             values, names = one_res.as_row
             names = tuple(map_col_name((table_name,), one_name, opts['col_name_map']) \
                                                                         for one_name in names)
@@ -767,7 +765,7 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
             if one_field['type'] == 'esriFieldTypeDate':
                 date_indexes.append(field_idx)
 
-        for one_res in one_table.query('OBJECTId >= 0'):
+        for one_res in one_table.query('OBJECTID >= 0'):
             values, names = one_res.as_row
             names = (map_col_name((table_name,), one_name, opts['col_name_map'])
                                                                     for one_name in names)

@@ -25,9 +25,9 @@ def connect(user: str=None, password: str=None, host: str=None, database: str=No
         formatter = logging.Formatter('%(levelname)s: %(message)s')
 
         # Console handler
-        cur_handlerr = logging.StreamHandler()
-        cur_handlerr.setFormatter(formatter)
-        logger.addHandler(cur_handlerr)
+        cur_handler = logging.StreamHandler()
+        cur_handler.setFormatter(formatter)
+        logger.addHandler(cur_handler)
 
     new_conn = A2Database(logger)
     new_conn.connect(user, password, host, database)
@@ -934,7 +934,6 @@ class A2Database:
 
         res = self._cursor.fetchone()
         self._cursor.reset()
-
         if res and len(res) > 0 and res[0] == 1:
             return True
 
@@ -994,7 +993,6 @@ class A2Database:
 
         # Check for alias on a column name
         if col_alias:
-            self._logger.info(f'HACK: ALIAS: {query_cols} {col_alias}')
             query_cols = list((one_name if not one_name in col_alias else col_alias[one_name] \
                                                                         for one_name in query_cols))
 
