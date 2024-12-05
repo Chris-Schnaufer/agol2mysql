@@ -722,7 +722,7 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
                                                                         for one_name in names)
             if date_indexes:
                 values = tuple(values)
-                values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
+                values = tuple(datetime.utcfromtimestamp(int(values[cur_idx]/1000.0)) if cur_idx in \
                                 date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
             try:
                 if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
@@ -771,7 +771,7 @@ def process_esri_data(conn: A2Database, endpoint_url: str, client_id: str, featu
                                                                     for one_name in names)
             if date_indexes:
                 values = tuple(values)
-                values = tuple(datetime.utcfromtimestamp(values[cur_idx]/1000.0) if cur_idx in \
+                values = tuple(datetime.utcfromtimestamp(int(values[cur_idx]/1000.0)) if cur_idx in \
                             date_indexes else values[cur_idx] for cur_idx in range(0, len(values)))
             if process_esri_row(conn, table_name, tuple(names), tuple(values), opts, verbose):
                 added_updated_rows = added_updated_rows + 1

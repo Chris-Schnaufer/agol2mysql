@@ -389,7 +389,7 @@ class A2Database:
         query = f'SELECT count(1) FROM {table_name} WHERE {clean_key}=%s'
 
         if verbose is True:
-            self._logger.info(f'  {query} {primarykeyvalue}')
+            self._logger.info(f'{query} {primarykeyvalue}')
 
         self._cursor.execute(query, (primarykeyvalue,))
         res = self._cursor.fetchone()
@@ -913,12 +913,23 @@ class A2Database:
             check_cols = tuple((one_name if not one_name in col_alias else col_alias[one_name] \
                                                                         for one_name in check_cols))
 
-        # Start building the query
-        query = f'SELECT count(1) FROM {table_name} WHERE ' + \
-                ' AND '.join((f'`{A2Database._sqlstr(one_name)}`=%s' for one_name in check_cols))
-
         # Build up the values to pass
         query_values = list(col_values[col_names.index(one_name)] for one_name in check_cols)
+
+        # Start building the query
+        query = f'SELECT count(1) FROM {table_name} WHERE '
+        joiner = ''
+        for idx in range(0, len(check_cols)):
+            query += joiner + f'`{A2Database._sqlstr(check_cols[idx])}`'
+            if query_values[idx] is None:
+                query += ' is null'
+            else:
+                query += '=%s'
+            joiner = ' AND '
+
+#            if idx > 18: # 14
+#                query_values = query_values[:idx+1]
+#                break
 
         # Build up the geometry portion of the query
         if geom_col_info and not primary_key:
@@ -926,6 +937,9 @@ class A2Database:
                      f'{geom_col_info["col_sql"]}'
             query_values.extend((col_values[col_names.index(one_name)] for one_name in \
                                                                     geom_col_info['sheet_cols']))
+
+        # Remove None's that have been converted to null checks
+        query_values = list(one_val for one_val in query_values if one_val is not None)
 
         # Run the query and determine if we have a row or not
         if verbose:
