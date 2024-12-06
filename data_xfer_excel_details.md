@@ -74,7 +74,7 @@ If the check shows that the AGOL data is newer, the asssociated database entry w
 All new records that are found will be added to the database.
 
 ##### key_name flag
-Specifies the name of the database primary key column in the spreadsheet.
+Specifies the name of the database primary key column in the AGOL table.
 This key is used to perform a data lookup when detecting if a row is in the database.
 
 When this flag isn't used, a full row lookup is used to determine if the data already exists.
@@ -91,15 +91,15 @@ The table name in the database can also be changed to match the new name so that
 This flag can be specified multiple times, or none times, on the command line.
 
 ##### point_cols flag
-This flag is used to specify the spreadsheet's column names of a point's X and Y values.
+This flag is used to specify the AGOL table's column names of a point's X and Y values.
 
 The format of this flag is `--point_cols "<X column name>, <Y column name>"`.
 The X and Y values will be combined with the EPSG code to create or update a point in the database.
 
-The spreadsheet point's coordinate system (see --geometry_epsg) will be converted to the database's if needed.
+The AGOL table point's coordinate system (see --geometry_epsg) will be converted to the database's if needed.
 
 ##### reset flag
 WARNING: this flag can cause data to be lost forever! Back up your data before using this flag.
 
-When this flag is specified, the existing data in the table is deleted before the spreadsheet data is uploaded.
-The existing data is deleted regardless of whether the upload of spreadssheet data is successful, or not.
+When this flag is specified, the existing data in the table is deleted before the AGOL table data is uploaded.
+The existing data is deleted regardless of whether the upload of AGOL table data is successful, or not.
