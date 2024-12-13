@@ -51,9 +51,9 @@ DEFAULT_LOG_FILENAME = 'data_xfer_excel.out'
 # AGOL URL
 DEFAULT_ESRI_URL = 'https://uagis.maps.arcgis.com'
 # The client ID used to connect to AGOL
-DEFAULT_SURVEY123_CLIENT_ID ='7X8jzC2i59RTyBVp'
+#DEFAULT_SURVEY123_CLIENT_ID ='7X8jzC2i59RTyBVp'
 # The feature item ID
-DEFAULT_FEATURE_ITEM_ID = '7c8545bda6094875a5bf518de7f62b16'
+#DEFAULT_FEATURE_ITEM_ID = '7c8545bda6094875a5bf518de7f62b16'
 
 # Argparse-related definitions
 # Declare the progam description
@@ -112,11 +112,9 @@ ARGPARSE_MAP_TABLE_NAME_HELP = 'Case-sensitive map a table name to a new name (i
 # The endpoint URL
 ARGPARSE_ESRI_ENDPOINT_HELP = f'URL to connect to. Default: {DEFAULT_ESRI_URL}'
 # The AGOL application to connect to
-ARGPARSE_ESRI_CLIENT_ID_HELP = 'The ID of the client to connect to. Default: ' \
-                               f'{DEFAULT_SURVEY123_CLIENT_ID}'
+ARGPARSE_ESRI_CLIENT_ID_HELP = 'The ID of the client to connect to'
 # The feature of interest to get the schema from
-ARGPARSE_ESRI_FEATURE_ID_HELP = 'The ID of the feature to get the database schema from. ' \
-                                f'Default: {DEFAULT_FEATURE_ITEM_ID}'
+ARGPARSE_ESRI_FEATURE_ID_HELP = 'The ID of the feature to get the database schema from'
 # Lowering the debug level to DEBUG
 ARGPARSE_LOGGING_DEBUG_HELP = 'Increases the logging level to include debugging messages'
 
@@ -169,10 +167,8 @@ def get_arguments(logger: logging.Logger) -> tuple:
                         help=ARGPARSE_MAP_TABLE_NAME_HELP)
     parser.add_argument('-ee', '--esri_endpoint', default=DEFAULT_ESRI_URL,
                         help=ARGPARSE_ESRI_ENDPOINT_HELP)
-    parser.add_argument('-ec', '--esri_client_id', default=DEFAULT_SURVEY123_CLIENT_ID,
-                        help=ARGPARSE_ESRI_CLIENT_ID_HELP)
-    parser.add_argument('-ef', '--esri_feature_id', default=DEFAULT_FEATURE_ITEM_ID,
-                        help=ARGPARSE_ESRI_FEATURE_ID_HELP)
+    parser.add_argument('-ec', '--esri_client_id', help=ARGPARSE_ESRI_CLIENT_ID_HELP)
+    parser.add_argument('-ef', '--esri_feature_id', help=ARGPARSE_ESRI_FEATURE_ID_HELP)
     parser.add_argument('--debug', help=ARGPARSE_LOGGING_DEBUG_HELP)
     args = parser.parse_args()
 
@@ -186,6 +182,14 @@ def get_arguments(logger: logging.Logger) -> tuple:
         except FileNotFoundError:
             logger.error(f'Unable to open EXCEL file {excel_file}')
             sys.exit(11)
+
+    # Check other parameters that were optional but aren't now
+    if not args.esri_client_id:
+        logger.error(f'Please specify ESRI client ID of app to use')
+        sys.exit(14)
+    if not args.esri_feature_id:
+        logger.error(f'Please specify the ESRI feature ID to use')
+        sys.exit(15)
 
     # Create the table name map
     table_name_map = {}
