@@ -274,6 +274,19 @@ class A2Database:
         """
         return needle.lower() in (str(idx).lower() for idx in haystack.keys())
 
+    def _get_geometry_zero(self, geom_type: str) -> str:
+        """Returns the zero values for the geometry type
+        Arguments:
+            The geometry type string
+        Return:
+            The zero values for the geometry type. eg: POINT returns "0.0,0.0"
+        """
+        match(geom_type.upper()):
+            case 'POINT':
+                return '0.0,0.0'
+
+        raise ValueError(f'Zero values requested for unsupported geomtry type {geom_type}')
+
     @property
     def verbose(self):
         """Returns the verbosity of the database calls """
@@ -515,13 +528,15 @@ class A2Database:
         return self._cursor.rowcount > 0
 
     def table_cols_match(self, table_name: str, col_info: tuple, verbose: bool=None,
-                         ignore_missing_cols: bool=None) -> bool:
+                         ignore_missing_cols: bool=None) -> tuple:
         """Determines if the current columns in the database table matches the specification
         Arguments:
             table_name: the name of the table to drop
             col_info: see create_table() for the list of fields used
             verbose: override default for printing query information (prints if True)
             ignore_missing_cols: ignore any missing columns in new table definition
+        Returns:
+            Returns the success of the operation and a set containing the names of any new columns
         """
         if verbose is None:
             verbose = self._verbose
@@ -536,11 +551,10 @@ class A2Database:
 
         self._cursor.execute(query, (self._conn.database, table_name))
 
-        #_ = self._cursor.fetchall()
-
         # Prepare to loop through the data
         col_indexes = {A2Database._sqlstr(col_val['name']):col_idx for col_idx, col_val in \
                                                 enumerate(col_info)}
+        extra_cols = None
 
         # Loop through the columns returned
         found_cols = []
@@ -552,7 +566,7 @@ class A2Database:
                         self._logger.warn(f'Table "{table_name}" column "{col_name}" is not ' \
                                'found in new table definition')
                     self._cursor.reset()
-                    return False
+                    return False, extra_cols
 
                 if verbose:
                     self._logger.warn(f'Ignoring table "{table_name}" column "{col_name}" ' \
@@ -566,25 +580,25 @@ class A2Database:
             if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
                                             match_col['type']) and not ignore_missing_cols:
                 self._cursor.reset()
-                return False
+                return False, extra_cols
 
             if 'null_allowed' in match_col and bool(is_nullable) != bool(match_col['null_allowed']):
                 self._cursor.reset()
-                return False
+                return False, extra_cols
 
             if 'is_primary' in match_col and (col_key == 'PRI') != bool(match_col['is_primary']):
                 self._cursor.reset()
-                return False
+                return False, extra_cols
 
             if 'auto_increment' in match_col and bool(auto_increment) != \
                                                             bool(match_col['auto_increment']):
                 self._cursor.reset()
-                return False
+                return False, extra_cols
 
             if 'default' in match_col and match_col['default'] is not None and \
                             column_default.casefold() != match_col['default'].casefold():
                 self._cursor.reset()
-                return False
+                return False, extra_cols
 
             found_cols.append(col_name.casefold())
 
@@ -598,7 +612,8 @@ class A2Database:
             self._logger.info(f'Table {table_name} has fewer defined columns than it\'s definition')
             for one_col in extra_cols:
                 self._logger.info(f'    {one_col}')
-        return len(found_cols) == len(col_info) or ignore_missing_cols
+        return (len(found_cols) == len(col_info) or (ignore_missing_cols and not extra_cols)), \
+                        extra_cols
 
     def drop_table(self, table_name: str, verbose: bool=None, readonly: bool=False) -> None:
         """Drops the specified table from the database. Will remove any foreign keys dependent
@@ -740,6 +755,131 @@ class A2Database:
         if not readonly:
             self._cursor.execute(query)
             self._cursor.reset()
+
+        return fks_created, idx_created
+
+    def add_table_cols(self, table_name: str, new_col_info: tuple, verbose: bool,
+                       readonly: bool=False) -> None:
+        """Adds the specified columns to the specified table
+        Arguments:
+            table_name: name of the table to create
+            new_col_info: a list of column information for the table
+            verbose: override default for printing query information (prints if True)
+            readonly: don't execute SQL statements that modify the database
+        Notes:
+            Referenced keys for each column information dict in the new_col_info list are: 
+                'name': str: the column name
+                'type': str: the database type of the column
+                'null_allowed': bool: column allows NULL values
+                'srid': int: the SRID of a geometry column
+                'is_primary': bool: the column is a primary key
+                'auto_increment': bool: the column auto-increments
+                'default': ?: optional default value for the column (type matches column type)
+                'comment': str: optional comment string
+                'foreign_key': {'reference': <referenced table name>, 'reference_col': \
+                                <referenced column name>}: foreign key definition
+                'index': bool: create an index on the column
+                'is_spatial': bool: is a spatial column when True
+        """
+        if verbose is None:
+            verbose = self._verbose
+
+        fks_created = {}
+        idx_created = {}
+
+        # Declare variables
+        table_name = A2Database._sqlstr(table_name)
+
+        # Open the statement to create the table
+        query = f'ALTER TABLE {table_name} '
+        query_cols = []
+        query_add = []
+        geom_cols = []
+        sql_connector = ''
+
+        # Process the columns
+        for one_col in new_col_info:
+            col_name = A2Database._sqlstr(one_col['name'])
+
+            # Be sure to prefix a space before appending strings to the SQL
+            # The order of processing the parameters is important (eg: NOT NULL)
+            col_sql = f'`{col_name}` {one_col["type"]}'
+            if 'null_allowed' in one_col and isinstance(one_col['null_allowed'], bool):
+                if not one_col['null_allowed'] and not \
+                                ('is_spatial' in one_col and one_col['is_spatial']):
+                    col_sql += ' NOT NULL'
+
+            if 'srid' in one_col and one_col['srid']:
+                if self.version_major >= 8:
+                    col_sql += f' SRID {one_col["srid"]}'
+
+            if 'is_primary' in one_col and one_col['is_primary']:
+                col_sql += ' PRIMARY KEY'
+                idx_created['PRIMARY'] = (f'`{col_name}`',)
+
+            if 'auto_increment' in one_col and one_col['auto_increment']:
+                col_sql += ' AUTO_INCREMENT'
+
+            if 'default' in one_col and one_col['default'] is not None:
+                col_sql += f' DEFAULT {one_col["default"]}'
+
+            if 'comment' in one_col and one_col['comment'] is not None:
+                col_sql += f' COMMENT \'{one_col["comment"]}\''
+
+            if 'foreign_key' in one_col and one_col['foreign_key']:
+                fk_info = one_col['foreign_key']
+                query_add.append(f'ADD FOREIGN KEY (`{col_name}`) REFERENCES ' \
+                                            f'{fk_info["reference"]}({fk_info["reference_col"]})')
+                fks_created[col_name] = (fk_info['reference'], fk_info['reference_col'])
+
+            if 'index' in one_col and one_col['index']:
+                if not ('is_spatial' in one_col and one_col['is_spatial']):
+                    idx_name = f'{table_name[:25]}_' + self._get_name_uuid() + '_idx'
+                    query_add.append(f'ADD INDEX {idx_name} (`{col_name}`)')
+                    idx_created[idx_name] = (col_name,)
+
+            query_cols.append(f'ADD COLUMN {col_sql}{sql_connector} ')
+            sql_connector = ','
+
+            if 'is_spatial' in one_col and one_col['is_spatial']:
+                geom_cols.append(one_col)
+
+        # Join the SQL and close the statement
+        query += ','.join(query_cols + query_add)
+
+        if verbose:
+            self._logger.info(query)
+
+        if not readonly:
+            self._cursor.execute(query)
+            self._cursor.reset()
+
+        for one_col in geom_cols:
+            col_name = A2Database._sqlstr(one_col['name'])
+            query = f'UPDATE {table_name} set geom=ST_SRID({one_col["type"]} ' \
+                    f'({self._get_geometry_zero(one_col["type"])}),{one_col["srid"]}) ' \
+                    f'where `{col_name}` is NULL'
+            if verbose:
+                self._logger.info(query)
+            if not readonly:
+                self._cursor.execute(query)
+                self._cursor.reset()
+
+            query = f'ALTER TABLE {table_name} CHANGE COLUMN `{col_name}` `{col_name}` '\
+                    f'{one_col["type"]} NOT NULL SRID {one_col["srid"]}'
+            if verbose:
+                self._logger.info(query)
+            if not readonly:
+                self._cursor.execute(query)
+                self._cursor.reset()
+
+            query_add.append(f'ADD SPATIAL INDEX(`{col_name}`)')
+            idx_created[col_name] = (col_name,)
+            if verbose:
+                self._logger.info(query)
+            if not readonly:
+                self._cursor.execute(query)
+                self._cursor.reset()
 
         return fks_created, idx_created
 
@@ -1003,7 +1143,6 @@ class A2Database:
             query_cols = col_names
             query_types = list(('%s' for one_name in query_cols))
             query_values = list(col_values)
-            self._logger.info('HACK: NO GEOMETRY')
 
         # Check for alias on a column name
         if col_alias:

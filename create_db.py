@@ -583,7 +583,8 @@ def layer_table_get_indexes(table_name: str , indexes: tuple, columns: tuple,
             'table': table_name,
             'column_names': list(index_fields),
             'ascending': one_index['isAscending'],
-            'unique': one_index['isUnique'] and (len(index_fields) != 1 or not 'objectid' in index_fields),
+            'unique': one_index['isUnique'] and (len(index_fields) != 1 or \
+                                                    not 'objectid' in index_fields),
             'description': f'({one_index["name"]}) {one_index["description"]}'
             })
 
@@ -721,20 +722,26 @@ def db_process_table(conn: A2Database, table: dict, opts: dict) -> None:
     # Check if the table already exists
     matches = False
     if conn.table_exists(table['name']):
-        matches = conn.table_cols_match(table['name'], table['columns'], verbose, \
+        matches, new_col_names = conn.table_cols_match(table['name'], table['columns'], verbose, \
                                         ignore_missing_cols)
         if not matches:
-            if not force and not readonly:
-                raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
-                                    'please remove it before trying again')
-
-            if not readonly:
-                opts['logger'].info(f'Forcing the drop of table {table["name"]}')
+            if new_col_names and len(new_col_names) > 0:
+                conn.add_table_cols(table['name'], \
+                    (new_col for new_col in table['columns'] if new_col['name'] in new_col_names),
+                    verbose, readonly)
+                matches = True
             else:
-                opts['logger'].info(f'READONLY: table {table["name"]} exists and would need ' \
-                       'the force flag specified')
-                opts['logger'].info('          continuing in read only mode...')
-            conn.drop_table(table['name'], verbose, readonly=readonly)
+                if not force and not readonly:
+                    raise RuntimeError(f'Table {table["name"]} already exists in the database, ' \
+                                        'please remove it before trying again')
+
+                if not readonly:
+                    opts['logger'].info(f'Forcing the drop of table {table["name"]}')
+                else:
+                    opts['logger'].info(f'READONLY: table {table["name"]} exists and would need ' \
+                           'the force flag specified')
+                    opts['logger'].info('          continuing in read only mode...')
+                conn.drop_table(table['name'], verbose, readonly=readonly)
         elif force:
             if readonly:
                 opts['logger'].info(f'READONLY: table {table["name"]} matches definition and ' \
@@ -976,8 +983,8 @@ def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
 
     # Start accumulating the table structure as JSON
     cur_json = {"layers": [], "tables": []}
-    if feature_layer:
-        cur_json["tables"].append(json.loads(str(feature_layer.properties)))
+    for one_layer in search_res.layers:
+        cur_json["tables"].append(json.loads(str(one_layer.properties)))
 
     for one_table in search_res.tables:
         cur_json["tables"].append(json.loads(str(one_table.properties)))
