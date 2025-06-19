@@ -225,7 +225,7 @@ class A2Database:
         if col_size is None:
             if not size_opt:
                 return False
-        elif col_size != db_col_size:
+        elif col_size != db_col_size and col_size > db_col_size:
             return False
 
         return True
