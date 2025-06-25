@@ -137,14 +137,14 @@ class A2Database:
                                     password=password,
                                     user=user
                                     )
-            self._cursor = self._conn.cursor()
+            cursor = self._conn.cursor()
 
             # Get the database version
-            self._cursor.execute('SELECT VERSION()')
-            cur_row = next(self._cursor)
+            cursor.execute('SELECT VERSION()')
+            cur_row = next(cursor)
             if cur_row:
                 self._mysql_version = list(int(ver) for ver in cur_row[0].split('-')[0].split('.'))
-            self._cursor.reset()
+            cursor.close()
 
     @staticmethod
     def _sqlstr(string: str) -> str:
@@ -217,7 +217,10 @@ class A2Database:
         """
         col_name = col_type.split('(')[0] if '(' in col_type else col_type
         if db_col_name.casefold() != col_name.casefold():
-            return False
+            # Check for special equivelencies
+            if not (db_col_name.casefold() in ['char','varchar'] and \
+                                                        col_name.casefold() in ['char','varchar']):
+                return False
 
         # Check column size, if it's missing and optional we're OK. Otherwise the sizes
         # need to be the same
@@ -335,7 +338,23 @@ class A2Database:
     @property
     def cursor(self):
         """Returns the database cursor for functions this class doesn't support"""
+        if not self._cursor:
+            self._cursor = self._conn.cursor()
         return self._cursor
+
+    @property
+    def reset_cusor(self):
+        if self._cursor:
+            self._cursor.close()
+        self._cursor = self._conn.cursor()
+        return self._cursor
+
+    @property
+    def clear_cusor(self):
+        if self._cursor:
+            self._cursor.close()
+        self._cursor = None
+        return None
 
     @property
     def version(self):
@@ -404,9 +423,10 @@ class A2Database:
         if verbose is True:
             self._logger.info(f'{query} {primarykeyvalue}')
 
-        self._cursor.execute(query, (primarykeyvalue,))
-        res = self._cursor.fetchone()
-        self._cursor.reset()
+        cursor = self._conn.cursor()
+        cursor.execute(query, (primarykeyvalue,))
+        res = cursor.fetchone()
+        cursor.close()
 
         if res and len(res) > 0 and res[0] > 0:
             return True
@@ -446,12 +466,14 @@ class A2Database:
 
         query = 'SELECT column_name,column_type,column_comment FROM INFORMATION_SCHEMA.COLUMNS ' \
                 'WHERE table_schema = %s AND table_name=%s'
-        self._cursor.execute(query, (self._conn.database, table_name))
+
+        cursor = self._conn.cursor()
+        cursor.execute(query, (self._conn.database, table_name))
 
         # Try and find a geometry column while collecting comments with aliases
         col_aliases = {}
         geom_col, geom_type = None, None
-        for col_name, col_type, col_comment in self._cursor:
+        for col_name, col_type, col_comment in cursor:
             # Check for geometry
             if isinstance(col_type, bytes):
                 col_type_str = col_type.decode("utf-8").upper()
@@ -470,6 +492,7 @@ class A2Database:
                 col_aliases[alias_name] = col_name
 
         if not geom_col:
+            cursor.close()
             return None, col_aliases
 
         # Assemble the geometry type information
@@ -478,6 +501,7 @@ class A2Database:
             case 'POINT':
                 point_col_x, point_col_y = self._geom_col_names(1, **kwargs)
                 if not point_col_x or not point_col_y:
+                    cursor.close()
                     raise ValueError(f'Point type found in table {table_name} but columns were '
                                       'not specified')
                 if all(expected_col in col_names for expected_col in (point_col_x, point_col_y)):
@@ -501,12 +525,15 @@ class A2Database:
 #                                     col_names)
             # Add other cases here
             case _:
+                cursor.close()
                 raise NotImplementedError(f'Unsupported geometry type {geom_type} specified')
 
         if return_info is None:
+            cursor.close()
             raise ValueError(f'Unsupported geometry column found "{geom_col}"" of type ' \
                              f'{geom_type} in table "{table_name}"')
 
+        cursor.close()
         return return_info, col_aliases
 
     def table_exists(self, table_name: str) -> bool:
@@ -521,11 +548,15 @@ class A2Database:
         query = 'SELECT table_schema, table_name FROM INFORMATION_SCHEMA.TABLES WHERE ' \
                 'table_schema = %s AND table_name = %s'
 
-        self._cursor.execute(query, (self._conn.database, table_name))
+        cursor = self._conn.cursor()
+        cursor.execute(query, (self._conn.database, table_name))
 
-        _ = self._cursor.fetchall()
+        _ = cursor.fetchall()
 
-        return self._cursor.rowcount > 0
+        result = cursor.rowcount > 0
+        cursor.close()
+
+        return result
 
     def table_cols_match(self, table_name: str, col_info: tuple, verbose: bool=None,
                          ignore_missing_cols: bool=None) -> tuple:
@@ -549,7 +580,8 @@ class A2Database:
                 'column_default FROM ' \
                 'INFORMATION_SCHEMA.COLUMNS WHERE table_schema = %s AND table_name=%s'
 
-        self._cursor.execute(query, (self._conn.database, table_name))
+        cursor = self._conn.cursor()
+        cursor.execute(query, (self._conn.database, table_name))
 
         # Prepare to loop through the data
         col_indexes = {A2Database._sqlstr(col_val['name']):col_idx for col_idx, col_val in \
@@ -559,13 +591,13 @@ class A2Database:
         # Loop through the columns returned
         found_cols = []
         for col_name, col_type, col_char_max_len, col_key, _, numeric_scale, \
-                                is_nullable, auto_increment, column_default in self._cursor:
+                                is_nullable, auto_increment, column_default in cursor:
             if not self._case_insensitive_find(col_name, col_indexes):
                 if not ignore_missing_cols:
                     if verbose:
                         self._logger.warn(f'Table "{table_name}" column "{col_name}" is not ' \
                                'found in new table definition')
-                    self._cursor.reset()
+                    cursor.close()
                     return False, extra_cols
 
                 if verbose:
@@ -577,32 +609,35 @@ class A2Database:
             if col_name in col_indexes:
                 match_col = col_info[col_indexes[col_name]]
 
+            self._logger.info(f'HACK:COLMATCH: {col_type} {col_char_max_len} {numeric_scale} {match_col["type"]} {match_col}')
+            if type(col_type) == bytes:
+                col_type = col_type.decode('utf-8')
             if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
                                             match_col['type']) and not ignore_missing_cols:
-                self._cursor.reset()
+                cursor.close()
                 return False, extra_cols
 
             if 'null_allowed' in match_col and bool(is_nullable) != bool(match_col['null_allowed']):
-                self._cursor.reset()
+                cursor.close()
                 return False, extra_cols
 
             if 'is_primary' in match_col and (col_key == 'PRI') != bool(match_col['is_primary']):
-                self._cursor.reset()
+                cursor.close()
                 return False, extra_cols
 
             if 'auto_increment' in match_col and bool(auto_increment) != \
                                                             bool(match_col['auto_increment']):
-                self._cursor.reset()
+                cursor.close()
                 return False, extra_cols
 
             if 'default' in match_col and match_col['default'] is not None and \
                             column_default.casefold() != match_col['default'].casefold():
-                self._cursor.reset()
+                cursor.close()
                 return False, extra_cols
 
             found_cols.append(col_name.casefold())
 
-        self._cursor.reset()
+        cursor.close()
 
         # Make sure we found everything that's specified in the column definitions
         if verbose and not len(found_cols) == len(col_info):
@@ -631,9 +666,12 @@ class A2Database:
         # Find and remove any foreign key that point to this table
         query = 'SELECT table_name, constraint_name FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE ' \
                 'WHERE referenced_table_schema = %s AND referenced_table_name=%s'
-        self._cursor.execute(query, (self._conn.database, table_name))
+
+        cursor = self._conn.cursor()
+        cursor.execute(query, (self._conn.database, table_name))
+
         fks = {}
-        for parent_table_name, constraint_name in self._cursor:
+        for parent_table_name, constraint_name in cursor:
             if parent_table_name not in fks:
                 fks[parent_table_name] = [constraint_name]
             else:
@@ -644,8 +682,9 @@ class A2Database:
                 if verbose is True:
                     self._logger.info(f'  {query}')
                 if not readonly:
-                    self._cursor.execute(query)
-                    self._cursor.reset()
+                    new_cursor = self._conn.cursor()
+                    new_cursor.execute(query)
+                    new_cursor.close()
 
         # Drop the table itself
         query = f'DROP TABLE {table_name}'
@@ -653,11 +692,8 @@ class A2Database:
             self._logger.info(f'  {query}')
 
         if not readonly:
-            self._cursor.execute(query)
-            self._cursor.reset()
-
-            self._cursor.close()
-            self._cursor = self._conn.cursor()
+            cursor.execute(query)
+            cursor.close()
 
     def create_table(self, table_name: str, col_info: tuple, verbose: bool=None,
                      readonly: bool=False) -> tuple:
@@ -753,8 +789,9 @@ class A2Database:
             self._logger.info(query)
 
         if not readonly:
-            self._cursor.execute(query)
-            self._cursor.reset()
+            cursor = self._conn.cursor()
+            cursor.execute(query)
+            cursor.close()
 
         return fks_created, idx_created
 
@@ -851,8 +888,9 @@ class A2Database:
             self._logger.info(query)
 
         if not readonly:
-            self._cursor.execute(query)
-            self._cursor.reset()
+            cursor = self._conn.cursor()
+            cursor.execute(query)
+            cursor.close()
 
         for one_col in geom_cols:
             col_name = A2Database._sqlstr(one_col['name'])
@@ -862,24 +900,27 @@ class A2Database:
             if verbose:
                 self._logger.info(query)
             if not readonly:
-                self._cursor.execute(query)
-                self._cursor.reset()
+                cursor = self._conn.cursor()
+                cursor.execute(query)
+                cursor.close()
 
             query = f'ALTER TABLE {table_name} CHANGE COLUMN `{col_name}` `{col_name}` '\
                     f'{one_col["type"]} NOT NULL SRID {one_col["srid"]}'
             if verbose:
                 self._logger.info(query)
             if not readonly:
-                self._cursor.execute(query)
-                self._cursor.reset()
+                cursor = self._conn.cursor()
+                cursor.execute(query)
+                cursor.close()
 
             query_add.append(f'ADD SPATIAL INDEX(`{col_name}`)')
             idx_created[col_name] = (col_name,)
             if verbose:
                 self._logger.info(query)
             if not readonly:
-                self._cursor.execute(query)
-                self._cursor.reset()
+                cursor = self._conn.cursor()
+                cursor.execute(query)
+                cursor.close()
 
         return fks_created, idx_created
 
@@ -895,11 +936,15 @@ class A2Database:
         query = 'SELECT table_schema, table_name FROM INFORMATION_SCHEMA.TABLES WHERE ' \
                 'table_schema = %s AND table_name = %s'
 
-        self._cursor.execute(query, (self._conn.database, view_name))
+        cursor = self._conn.cursor()
+        cursor.execute(query, (self._conn.database, view_name))
 
-        _ = self._cursor.fetchall()
+        _ = cursor.fetchall()
 
-        return self._cursor.rowcount > 0
+        result = cursor.rowcount > 0
+        cursor.close()
+
+        return result
 
     def drop_view(self, view_name: str, verbose: bool=None, readonly: bool=False) -> None:
         """Drops the view from the database
@@ -917,8 +962,9 @@ class A2Database:
                 self._logger.info(query)
 
             if not readonly:
-                self._cursor.execute(query)
-                self._cursor.reset()
+                cursor = self._conn.cursor()
+                cursor.execute(query)
+                cursor.close()
 
     def create_view(self, view_name: str, table_name: str, col_info: tuple, verbose: bool=None,
                     readonly: bool=False) -> None:
@@ -994,8 +1040,9 @@ class A2Database:
             self._logger.info(query)
 
         if not readonly:
-            self._cursor.execute(query)
-            self._cursor.reset()
+            cursor = self._conn.cursor()
+            cursor.execute(query)
+            cursor.close()
 
     def check_data_exists(self, table_name: str, col_names: tuple, col_values: tuple, \
                           col_alias: dict=None, geom_col_info: dict=None, primary_key: str=None, \
@@ -1084,10 +1131,11 @@ class A2Database:
         # Run the query and determine if we have a row or not
         if verbose:
             self._logger.info(f'{query} {query_values}')
-        self._cursor.execute(query, query_values)
+        cursor = self._conn.cursor()
+        cursor.execute(query, query_values)
 
-        res = self._cursor.fetchone()
-        self._cursor.reset()
+        res = _cursor.fetchone()
+        cursor.close()
         if res and len(res) > 0 and res[0] == 1:
             return True
 
@@ -1173,5 +1221,6 @@ class A2Database:
             self._logger.info(f'{query} {query_values}')
 
         if not readonly:
-            self._cursor.execute(query, query_values)
-            self._cursor.reset()
+            cursor = self._conn.cursor()
+            cursor.execute(query, query_values)
+            cursor.close()
