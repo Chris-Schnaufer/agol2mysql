@@ -349,7 +349,7 @@ class A2Database:
         self._cursor = self._conn.cursor()
         return self._cursor
 
-    def clear_cusor(self):
+    def clear_cursor(self):
         if self._cursor:
             self._cursor.close()
         self._cursor = None
