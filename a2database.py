@@ -135,7 +135,8 @@ class A2Database:
                                     host=host,
                                     database=database,
                                     password=password,
-                                    user=user
+                                    user=user,
+                                    buffered=True
                                     )
             cursor = self._conn.cursor()
 
@@ -595,6 +596,7 @@ class A2Database:
                     if verbose:
                         self._logger.warn(f'Table "{table_name}" column "{col_name}" is not ' \
                                'found in new table definition')
+                    cursor.reset()
                     cursor.close()
                     return False, extra_cols
 
