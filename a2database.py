@@ -343,18 +343,16 @@ class A2Database:
         return self._cursor
 
     @property
-    def reset_cusor(self):
+    def cusor_reset(self):
         if self._cursor:
             self._cursor.close()
         self._cursor = self._conn.cursor()
         return self._cursor
 
-    @property
     def clear_cusor(self):
         if self._cursor:
             self._cursor.close()
         self._cursor = None
-        return None
 
     @property
     def version(self):
@@ -483,7 +481,7 @@ class A2Database:
                 geom_col = col_name
                 geom_type = col_type_str
             # Check for an alias and strip it out of the comment
-            if isinstance(col_comment, bytes) or isinstance(col_comment, bytearray):
+            if isinstance(col_comment, (bytes, bytearray)):
                 col_comment_str = col_comment.decode("utf-8").upper()
             else:
                 col_comment_str = col_comment
@@ -610,7 +608,7 @@ class A2Database:
                 match_col = col_info[col_indexes[col_name]]
 
             self._logger.info(f'HACK:COLMATCH: {col_type} {col_char_max_len} {numeric_scale} {match_col["type"]} {match_col}')
-            if type(col_type) == bytes:
+            if isinstance(col_type, bytes):
                 col_type = col_type.decode('utf-8')
             if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
                                             match_col['type']) and not ignore_missing_cols:
@@ -1134,7 +1132,7 @@ class A2Database:
         cursor = self._conn.cursor()
         cursor.execute(query, query_values)
 
-        res = _cursor.fetchone()
+        res = cursor.fetchone()
         cursor.close()
         if res and len(res) > 0 and res[0] == 1:
             return True

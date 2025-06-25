@@ -152,10 +152,10 @@ def get_arguments(logger: logging.Logger) -> tuple:
 
     # Check other parameters that were optional but aren't now
     if not args.esri_client_id:
-        logger.error(f'Please specify ESRI client ID of app to use')
+        logger.error('Please specify ESRI client ID of app to use')
         sys.exit(14)
     if not args.esri_feature_id:
-        logger.error(f'Please specify the ESRI feature ID to use')
+        logger.error('Please specify the ESRI feature ID to use')
         sys.exit(15)
 
     # Create the table name map
@@ -786,12 +786,13 @@ def find_matching_index(conn: A2Database, table_name: str, index_column_names: l
     # Setup for index verification check
     query = 'SELECT index_name, column_name FROM INFORMATION_SCHEMA.STATISTICS WHERE ' \
             'table_schema = %s AND table_name = %s ORDER BY seq_in_index ASC'
-    conn.execute(query, (conn.database, table_name))
+    conn.cursor.execute(query, (conn.database, table_name))
     for (index_name, column_name) in conn.cursor:
         if not index_name in found_indexes:
             found_indexes[index_name] = [column_name]
         else:
             found_indexes[index_name].append(column_name)
+    conn.clear_cursor
 
     # Verify that there isn't already an index on the table with the requested columns
     found_match = False
@@ -978,11 +979,7 @@ def get_esri_schema(endpoint_url: str, clientid: str, featureid: str) -> dict:
     search_res = gis.content.get(featureid)
 
     # Get the feature layer
-    feature_layer = None
-    if len(search_res) > 0:
-        if len(search_res.layers) > 0:
-            feature_layer = search_res.layers[0]
-    else:
+    if len(search_res) <= 0:
         raise ValueError('Unable to access item with ID {featureid} at {endpoint_url}')
 
     # Start accumulating the table structure as JSON
