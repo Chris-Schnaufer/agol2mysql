@@ -607,7 +607,6 @@ class A2Database:
             if col_name in col_indexes:
                 match_col = col_info[col_indexes[col_name]]
 
-            self._logger.info(f'HACK:COLMATCH: {col_type} {col_char_max_len} {numeric_scale} {match_col["type"]} {match_col}')
             if isinstance(col_type, bytes):
                 col_type = col_type.decode('utf-8')
             if not A2Database._cols_match(col_type, col_char_max_len, numeric_scale,
